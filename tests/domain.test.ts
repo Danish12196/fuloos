@@ -72,26 +72,29 @@ test("transfer validation rejects self transfers, missing destinations and categ
   );
   assert.throws(() => validateTransaction({ ...t, category_id: "x" }, ledger));
 });
-test("pre-opening transactions and incompatible category types are rejected", () => {
+test("pre-opening dates are rejected and categories work for both income and expenses", () => {
   assert.throws(() =>
     validateTransaction({ ...t, date: "2025-12-31" }, ledger),
   );
-  assert.throws(() =>
-    validateTransaction(
-      { ...t, type: "expense", to_account_id: null, category_id: "salary" },
-      {
-        ...ledger,
-        categories: [
-          {
-            id: "salary",
-            name: "Salary",
-            type: "income",
-            description: "",
-            color: "#000000",
-          },
-        ],
-      },
-    ),
-  );
+  const withCategory = {
+    ...ledger,
+    categories: [
+      { id: "shared", name: "Family", description: "", color: "#000000" },
+    ],
+  };
+  for (const type of ["income", "expense"] as const) {
+    assert.doesNotThrow(() =>
+      validateTransaction(
+        { ...t, type, to_account_id: null, category_id: "shared" },
+        withCategory,
+      ),
+    );
+    assert.throws(() =>
+      validateTransaction(
+        { ...t, type, to_account_id: null, category_id: "missing" },
+        withCategory,
+      ),
+    );
+  }
   assert.throws(() => validateTransaction({ ...t, amount: 1.2 }, ledger));
 });

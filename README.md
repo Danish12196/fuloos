@@ -1,6 +1,6 @@
 # Fuloos
 
-A UAE-focused personal finance tracker. Phase 1 is a responsive React + TypeScript web app with Supabase email/password authentication, user-owned accounts and categories, and manual income, expenses and transfers.
+A UAE-focused personal finance tracker. Phase 1 is a responsive React + TypeScript web app with PocketBase email/password authentication, user-owned accounts and neutral categories, and manual income, expenses and transfers.
 
 ## Local development
 
@@ -12,30 +12,27 @@ cp .env.example .env
 npm run dev
 ```
 
-Without Supabase environment variables, an explicitly labeled in-memory demo is available. Demo changes are discarded on exit/refresh. Demo access is not authentication and never writes financial records to the database.
+Without `VITE_POCKETBASE_URL`, an explicitly labeled in-memory demo is available. Demo changes are discarded on exit/refresh and never write financial records to the database.
 
-## Connect Supabase
+## Backend and deployment
 
-1. Create a **dedicated** Supabase project; do not run the schema in another application's database.
-2. Run `supabase/schema.sql` once using the SQL editor.
-3. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in `.env` (and deployment build environment). Only the publishable key belongs in browser code. Never use a service role/secret key.
-4. Configure Supabase Auth Site URL and allowed redirect URLs for your deployment and localhost. Keep email confirmation enabled; after confirmation users sign in with their password.
-5. Run `npm run build` and deploy `dist/` to your static hosting provider with SPA fallback to `index.html`.
+The web app builds to `dist/` for Vercel. Your persistent PocketBase instance at `https://pb.danishali.dev` provides authentication and data storage. See [PocketBase setup](pocketbase/README.md) for the namespaced migration and verification steps. The health endpoint is reachable; the migration has **not** been applied because server/admin access was not provided. Do not enable real-data use until the migration and two-user isolation checks are complete.
+
+Set `VITE_POCKETBASE_URL` as a build environment variable after backend setup. No superuser key or service credential belongs in browser code. User sessions are stored in localStorage, refreshed on app startup and removed on signout; restrict frontend script sources and avoid untrusted scripts. Signing out clears the current browser session; PocketBase tokens remain valid until expiry or server-side invalidation.
 
 ## Included
 
-- Sign up, confirmation-email notice, sign in, session restoration and sign out.
+- Sign up, sign in, session restoration and sign out.
 - Account CRUD: current, savings, credit card, cash and other; AED-only in Phase 1.
 - Signed opening balances with an as-of date; balances are derived from transactions.
-- Category CRUD with income/expense types, description and color.
+- Neutral category CRUD with description and color; one category can be used for income or expenses.
 - Transaction CRUD; month navigation, text search, account and type filters.
 - Overview with total net balance, monthly income/expenses, category spending and recent activity.
 - A transfer is one atomic row affecting both accounts; edits/deletion affect both sides together. Credit card payments are transfers. Opening balances and transfers are excluded from income/expenses.
 - Integer fils throughout; no floating-point monetary arithmetic.
-- Database RLS and composite ownership foreign keys prevent cross-user account/category references. Category types are enforced by a composite FK.
-- Database validation of opening dates; referenced account/category deletion is blocked.
+- PocketBase API ownership rules plus SQLite integrity triggers for cross-user references, transfers, dates and deletion restrictions.
 
-New users start with an empty workspace. Create accounts and categories before adding transactions. Deleting a used category requires reassignment first; deleting an account with transactions requires moving/removing them first. Editing an opening balance changes the derived current balance intentionally.
+New users start with an empty workspace. Create accounts and categories before adding transactions. Deleting a used category requires reassignment first; deleting an account with transactions requires moving/removing them first. Editing an opening balance intentionally changes the derived current balance.
 
 ## Checks
 
@@ -44,10 +41,10 @@ npm test
 npm run build
 ```
 
-The unit suite covers exact money parsing, net-balance conservation, credit repayment, opening balances, transfer validation and category/date constraints. An embedded PostgreSQL test also exercises the actual schema, including two-user RLS isolation, cross-user references, category type constraints, deletion restrictions and opening dates. Before a real-data release, verify live signup/confirmation/login and two-user database isolation against the provisioned project; SQL has not been production-verified until these checks are run.
+Tests cover exact money calculations, transfers, neutral-category usage, PocketBase HTTP adapter behavior and the migration's SQLite integrity triggers. The schema test runs the actual migration trigger SQL against embedded SQLite and inspects collection rule definitions; it does not substitute for live PocketBase API isolation tests. Live signup/signin and server migration verification remain pending server access.
 
 ## Scope
 
-Android, SMS capture, imports/PDFs, ML, budgets and LLM features are deferred. The Supabase ledger is shared-client-ready, while Phase 1 keeps one currency (AED) to prevent implicit FX conversions.
+Android, SMS capture, imports/PDFs, ML, budgets and LLM features are deferred. The ledger is shared-client-ready; Phase 1 keeps one currency (AED) to prevent implicit FX conversions.
 
 Design references: [Ivy Wallet](https://github.com/Ivy-Apps/ivy-wallet), [Actual accounts](https://actualbudget.org/docs/accounts/) and [Actual transfers](https://actualbudget.org/docs/transactions/transfers/). This is an original interface and implementation; no reference application's code or artwork is copied.

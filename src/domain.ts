@@ -16,7 +16,6 @@ export interface Account {
 export interface Category {
   id: string;
   name: string;
-  type: "expense" | "income";
   description: string;
   color: string;
 }
@@ -98,13 +97,8 @@ export function validateTransaction(
   } else {
     if (t.to_account_id)
       throw new Error("Only transfers can have a receiving account.");
-    if (
-      t.category_id &&
-      !ledger.categories.some(
-        (c) => c.id === t.category_id && c.type === t.type,
-      )
-    )
-      throw new Error("Choose a matching category.");
+    if (t.category_id && !ledger.categories.some((c) => c.id === t.category_id))
+      throw new Error("Choose an existing category.");
   }
 }
 export function totals(transactions: Transaction[]) {

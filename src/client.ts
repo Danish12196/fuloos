@@ -1,4 +1,10 @@
-import { createClient } from "@supabase/supabase-js";
-const url = import.meta.env.VITE_SUPABASE_URL;
-const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-export const supabase = url && key ? createClient(url, key) : null;
+import { PocketBaseBackend } from "./backend";
+export type { Session } from "./backend";
+const url = import.meta.env.VITE_POCKETBASE_URL;
+let storage: Storage | undefined;
+try {
+  storage = window.localStorage;
+} catch {
+  /* Private browsers can use an in-memory session. */
+}
+export const backend = url ? new PocketBaseBackend(url, storage) : null;
