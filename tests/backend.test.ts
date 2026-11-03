@@ -99,3 +99,20 @@ test("PocketBase rejects insecure remote origins", () => {
   assert.throws(() => new PocketBaseBackend("http://example.test"), /HTTPS/);
   assert.doesNotThrow(() => new PocketBaseBackend("http://localhost:8090"));
 });
+
+test("Google sign-in availability follows the configured Fuloos provider", async () => {
+  const f = fixture();
+  f.queue.push(json({ oauth2: { enabled: false, providers: [] } }));
+  assert.equal(await f.backend.googleEnabled(), false);
+  f.queue.push(
+    json({ oauth2: { enabled: true, providers: [{ name: "github" }] } }),
+  );
+  assert.equal(await f.backend.googleEnabled(), false);
+  f.queue.push(
+    json({ oauth2: { enabled: true, providers: [{ name: "google" }] } }),
+  );
+  assert.equal(await f.backend.googleEnabled(), true);
+  assert.ok(
+    f.calls.every((call) => call.url.endsWith("/fuloos_users/auth-methods")),
+  );
+});

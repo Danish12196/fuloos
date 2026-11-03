@@ -1940,3 +1940,32 @@ button {
 .category-grid {
   grid-template-columns: minmax(0, 1fr);
 }
+
+.google-sign-in {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 46px;
+  margin-top: 24px;
+  padding: 12px 16px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 15px;
+  font-weight: 550;
+  color: inherit;
+}
+.google-sign-in:hover:not(:disabled) {
+  background: var(--surface-soft, #edf3ea);
+}
+.google-sign-in:disabled {
+  cursor: not-allowed;
+}
+.google-setup-note {
+  font-size: 12px !important;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 10px 0 0;
+}

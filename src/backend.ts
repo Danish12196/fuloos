@@ -1,3 +1,4 @@
+import PocketBase, { BaseAuthStore } from "pocketbase";
 import type { Account, Category, Ledger, Transaction } from "./domain";
 export interface Session {
   token: string;
@@ -139,6 +140,29 @@ export class PocketBaseBackend {
       if (!this.session) return null;
       throw e;
     }
+  }
+  async googleEnabled(): Promise<boolean> {
+    const methods = await this.request<{
+      oauth2?: { enabled: boolean; providers: { name: string }[] };
+    }>("/api/collections/fuloos_users/auth-methods");
+    return (
+      !!methods.oauth2?.enabled &&
+      methods.oauth2.providers.some((provider) => provider.name === "google")
+    );
+  }
+  signInWithGoogle(): Promise<Session> {
+    // Invoke directly from the button click so the SDK can open its popup synchronously.
+    // Keep the SDK auth store in memory; the existing app owns session persistence.
+    const client = new PocketBase(this.url, new BaseAuthStore());
+    return client
+      .collection("fuloos_users")
+      .authWithOAuth2({ provider: "google" })
+      .then((data) =>
+        this.accept({
+          token: data.token,
+          record: { id: data.record.id, email: data.record.email },
+        }),
+      );
   }
   async signIn(email: string, password: string): Promise<Session> {
     return this.accept(

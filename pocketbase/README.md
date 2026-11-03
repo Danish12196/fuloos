@@ -22,3 +22,14 @@ The migration includes a down migration that **deletes Fuloos collections and th
 Keep regular off-device backups and update PocketBase through its supported version upgrade path. A self-hosted PocketBase instance does not depend on Supabase inactivity policies, but availability still depends on your server, persistent volume, backups and monitoring.
 
 References checked: [Migrations](https://pocketbase.io/docs/js-migrations/), [collection operations](https://pocketbase.io/docs/js-collections/) and [record API](https://pocketbase.io/docs/api-records/).
+
+## Google sign-in
+
+The frontend uses PocketBase's official SDK popup flow with a one-off realtime connection. It shares the normal Fuloos session after success. The button is enabled automatically when the public auth-methods endpoint advertises Google.
+
+1. In Google Cloud Console, create/configure an OAuth consent screen and an OAuth client of type **Web application**. For an external app in Testing, add your test Google accounts as test users.
+2. Add the exact authorized redirect URI: `https://pb.danishali.dev/api/oauth2-redirect`.
+3. In the PocketBase dashboard, edit **fuloos_users → Options → OAuth2**, enable OAuth2 and the Google provider, then enter the Google client ID and client secret and save. Store the secret only in PocketBase, never Vercel or the frontend repository.
+4. Reload Fuloos. Choose Continue with Google and verify a new user and an existing user can authenticate. Keep the Google popup and PocketBase realtime connection reachable through your reverse proxy.
+
+No migration or container restart is required for this provider setting. OAuth must be configured on `fuloos_users`, not `_superusers` or another application's users collection. Google login has not been end-to-end verified until the provider credentials are configured and the consent flow is completed.
