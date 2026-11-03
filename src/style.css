@@ -1969,3 +1969,66 @@ button {
   color: var(--muted);
   margin: 10px 0 0;
 }
+
+.csv-modal {
+  width: min(1000px, calc(100vw - 24px));
+  max-width: 1000px;
+}
+.csv-body {
+  padding: 0 28px 20px;
+}
+.csv-body fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.csv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+.csv-grid label,
+.csv-body fieldset > label:not(.csv-check) {
+  display: grid;
+  gap: 8px;
+}
+.csv-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.csv-check input,
+.csv-table input {
+  width: auto;
+  margin: 0;
+}
+.csv-table {
+  max-height: 350px;
+  overflow: auto;
+  margin-top: 16px;
+}
+.csv-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.csv-table th,
+.csv-table td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--border, #8884);
+}
+.csv-table td:last-child {
+  min-width: 160px;
+}
+@media (max-width: 600px) {
+  .csv-body {
+    padding: 0 16px 16px;
+  }
+  .csv-grid {
+    grid-template-columns: 1fr;
+  }
+}
