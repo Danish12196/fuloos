@@ -45,6 +45,12 @@ Tests cover exact money calculations, transfers, neutral-category usage, PocketB
 
 ## Scope
 
-Android, SMS capture, imports/PDFs, ML, budgets and LLM features are deferred. The ledger is shared-client-ready; Phase 1 keeps one currency (AED) to prevent implicit FX conversions.
+Android, SMS capture, PDF imports, ML, budgets and LLM features are deferred. The ledger is shared-client-ready; Phase 1 keeps one currency (AED) to prevent implicit FX conversions.
 
 Design references: [Ivy Wallet](https://github.com/Ivy-Apps/ivy-wallet), [Actual accounts](https://actualbudget.org/docs/accounts/) and [Actual transfers](https://actualbudget.org/docs/transactions/transfers/). This is an original interface and implementation; no reference application's code or artwork is copied.
+
+## CSV importing
+
+Open Transactions → Import CSV. Choose an existing AED account and file (UTF-8, up to 5 MB / 10,000 rows), set delimiter, header/leading rows, date format and decimal separator, then map date, amount (or debit/credit), payee, notes and existing category names. Negative signed amounts are expenses; positive amounts are income, with an optional sign flip.
+
+Review parsed transactions and exclude individual rows before confirming. Invalid rows cannot be imported. Exact account/date/type/amount/normalized-payee matches are marked as possible duplicates and excluded by default; users can include them deliberately. Transfers are not inferred. Files are parsed locally; only selected transactions are sent to PocketBase. Saves are sequential, not atomic: if a request fails, confirmed successful rows are excluded from retry. If a network timeout has an uncertain result, close and reopen the importer to reload the ledger before retrying.
