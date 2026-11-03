@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Session } from "@supabase/supabase-js";
+import { backend, type Session } from "./client";
+import { ThemeToggle } from "./ThemeToggle";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -23,7 +24,6 @@ import {
   Trash2,
   Pencil,
 } from "lucide-react";
-import { supabase } from "./client";
 import {
   balance,
   emptyLedger,
@@ -73,7 +73,7 @@ type Modal =
   | null;
 function App() {
   const [session, setSession] = useState<Session | null>(null),
-    [checking, setChecking] = useState(!!supabase),
+    [checking, setChecking] = useState(!!backend),
     [demo, setDemo] = useState(false),
     [ledger, setLedger] = useState<Ledger>(emptyLedger),
     [page, setPage] = useState("Overview"),
@@ -88,58 +88,28 @@ function App() {
     [hidden, setHidden] = useState(false);
   const generation = useRef(0);
   useEffect(() => {
-    if (!supabase) return;
-    supabase.auth
+    if (!backend) return;
+    backend
       .getSession()
-      .then(({ data, error }) => {
-        if (error) setError(error.message);
-        setSession(data.session);
-        setChecking(false);
-      })
-      .catch((e) => {
-        setError(String(e));
-        setChecking(false);
-      });
-    const { data } = supabase.auth.onAuthStateChange((_event, s) => {
+      .then(setSession)
+      .catch((e) => setError(message(e)))
+      .finally(() => setChecking(false));
+    return backend.subscribe((s) => {
       setSession(s);
       if (!s) {
         generation.current++;
         setLedger(emptyLedger);
       }
     });
-    return () => data.subscription.unsubscribe();
   }, []);
   async function load() {
-    if (!supabase || !session) return;
+    if (!backend || !session) return;
     const current = ++generation.current;
     setLoading(true);
     setError("");
     try {
-      async function rows(table: "accounts" | "categories" | "transactions") {
-        const all: Record<string, unknown>[] = [];
-        for (let offset = 0; ; offset += 500) {
-          const { data, error } = await supabase!
-            .from(table)
-            .select("*")
-            .order("id")
-            .range(offset, offset + 499);
-          if (error) throw error;
-          all.push(...data);
-          if (data.length < 500) break;
-        }
-        return all;
-      }
-      const results = await Promise.all([
-        rows("accounts"),
-        rows("categories"),
-        rows("transactions"),
-      ]);
-      if (current === generation.current)
-        setLedger({
-          accounts: results[0],
-          categories: results[1],
-          transactions: results[2],
-        } as unknown as Ledger);
+      const data = await backend.load();
+      if (current === generation.current) setLedger(data);
     } catch (e) {
       if (current === generation.current) setError(message(e));
     } finally {
@@ -175,21 +145,8 @@ function App() {
             }) as Ledger,
         );
       } else {
-        if (!supabase || !session) throw new Error("Please sign in.");
-        const result = id
-          ? await supabase
-              .from(table)
-              .update(value)
-              .eq("id", id)
-              .eq("user_id", session.user.id)
-              .select()
-              .single()
-          : await supabase
-              .from(table)
-              .insert({ ...value, user_id: session.user.id })
-              .select()
-              .single();
-        if (result.error) throw result.error;
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.save(table, value, id);
         await load();
       }
       setModal(null);
@@ -223,13 +180,8 @@ function App() {
           [table]: l[table].filter((v) => v.id !== id),
         }));
       else {
-        if (!supabase || !session) throw new Error("Please sign in.");
-        const { error } = await supabase
-          .from(table)
-          .delete()
-          .eq("id", id)
-          .eq("user_id", session.user.id);
-        if (error) throw error;
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.remove(table, id);
         await load();
       }
     } catch (e) {
@@ -265,7 +217,6 @@ function App() {
     )
     .sort((a, b) => b.date.localeCompare(a.date));
   const spending = ledger.categories
-    .filter((c) => c.type === "expense")
     .map((c) => ({
       ...c,
       total: monthly
@@ -281,7 +232,6 @@ function App() {
     spending.push({
       id: "uncategorized",
       name: "Uncategorized",
-      type: "expense",
       description: "",
       color: "#929b96",
       total: uncategorized,
@@ -359,8 +309,7 @@ function App() {
                 setDemo(false);
                 setLedger(emptyLedger);
               } else {
-                const r = await supabase?.auth.signOut();
-                if (r?.error) setError(r.error.message);
+                backend?.signOut();
               }
             }}
           >
@@ -374,6 +323,7 @@ function App() {
             Personal finance <span className="slash">/</span> <b>{page}</b>
           </span>
           <div className="topbar-right">
+            <ThemeToggle />
             <span className="currency-pill">
               AED <span>United Arab Emirates</span>
             </span>
@@ -717,57 +667,47 @@ function App() {
           )}
           {page === "Categories" && (
             <div className="category-grid">
-              {(["expense", "income"] as const).map((type) => (
-                <section className="panel" key={type}>
-                  <div className="panel-heading">
-                    <h2>
-                      {type === "expense" ? "Expense" : "Income"} categories
-                    </h2>
-                    <span className="count">
-                      {ledger.categories.filter((c) => c.type === type).length}
+              <section className="panel">
+                <div className="panel-heading">
+                  <h2>All categories</h2>
+                  <span className="count">{ledger.categories.length}</span>
+                </div>
+                {ledger.categories.map((c) => (
+                  <div className="category-item" key={c.id}>
+                    <span
+                      className="category-symbol"
+                      style={{ color: c.color, background: c.color + "18" }}
+                    >
+                      <Tags size={20} />
                     </span>
+                    <div>
+                      <b>{c.name}</b>
+                      <p>{c.description || "No description"}</p>
+                    </div>
+                    <button
+                      className="icon-button"
+                      aria-label={`Edit ${c.name}`}
+                      onClick={() => setModal({ kind: "category", item: c })}
+                    >
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      disabled={busy}
+                      aria-label={`Delete ${c.name}`}
+                      onClick={() => void remove("categories", c.id)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
                   </div>
-                  {ledger.categories
-                    .filter((c) => c.type === type)
-                    .map((c) => (
-                      <div className="category-item" key={c.id}>
-                        <span
-                          className="category-symbol"
-                          style={{ color: c.color, background: c.color + "18" }}
-                        >
-                          <Tags size={20} />
-                        </span>
-                        <div>
-                          <b>{c.name}</b>
-                          <p>{c.description || "No description"}</p>
-                        </div>
-                        <button
-                          className="icon-button"
-                          aria-label={`Edit ${c.name}`}
-                          onClick={() =>
-                            setModal({ kind: "category", item: c })
-                          }
-                        >
-                          <Pencil size={15} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          disabled={busy}
-                          aria-label={`Delete ${c.name}`}
-                          onClick={() => void remove("categories", c.id)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    ))}
-                  {!ledger.categories.some((c) => c.type === type) && (
-                    <Empty
-                      title="Make it your own"
-                      text="Create categories that fit your life."
-                    />
-                  )}
-                </section>
-              ))}
+                ))}
+                {!ledger.categories.length && (
+                  <Empty
+                    title="Make it your own"
+                    text="Create categories that fit your life."
+                  />
+                )}
+              </section>
             </div>
           )}
           {page === "Transactions" && (
@@ -962,7 +902,7 @@ function Auth({
     e.preventDefault();
     setError("");
     setNotice("");
-    if (!supabase) {
+    if (!backend) {
       setError(
         "Live authentication is not connected yet. You can explore the demo below.",
       );
@@ -970,12 +910,15 @@ function Auth({
     }
     setBusy(true);
     try {
-      const { data, error } = signup
-        ? await supabase.auth.signUp({ email, password })
-        : await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      if (signup && !data.session)
-        setNotice("Check your email to confirm your account, then sign in.");
+      if (signup) {
+        const result = await backend.signUp(email, password);
+        if (result.verificationRequired)
+          setNotice("Check your email to confirm your account, then sign in.");
+        else if (!result.session) {
+          setSignup(false);
+          setNotice("Your account is ready. Sign in to continue.");
+        }
+      } else await backend.signIn(email, password);
     } catch (e) {
       setError(message(e));
     } finally {
@@ -1022,6 +965,9 @@ function Auth({
         <small>YOUR MONEY, IN VIEW.</small>
       </section>
       <section className="auth-side">
+        <div className="auth-theme-toggle">
+          <ThemeToggle />
+        </div>
         <div className="auth-form">
           <span className="auth-tag">
             <Leaf size={16} /> Welcome to Fuloos
@@ -1101,7 +1047,7 @@ function Auth({
           <button className="demo-button" onClick={onDemo}>
             Explore the demo <ArrowRight size={16} />
           </button>
-          {!supabase && (
+          {!backend && (
             <p className="setup-note">
               Preview mode · Live sign-in will be available once the database is
               connected.
@@ -1171,20 +1117,10 @@ function Editor({
       } else if (modal.kind === "category") {
         const value = {
           name: s("name"),
-          type: s("type"),
           description: s("description"),
           color: s("color"),
         };
         if (!value.name) throw new Error("Enter a category name.");
-        if (
-          item &&
-          ledger.transactions.some(
-            (t) => t.category_id === item.id && t.type !== value.type,
-          )
-        )
-          throw new Error(
-            "This category has transactions. Its type cannot be changed.",
-          );
         await save("categories", value, item?.id);
       } else {
         const value = {
@@ -1321,13 +1257,11 @@ function Editor({
                     }
                   >
                     <option value="">Uncategorized</option>
-                    {ledger.categories
-                      .filter((c) => c.type === kind)
-                      .map((c) => (
-                        <option value={c.id} key={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
+                    {ledger.categories.map((c) => (
+                      <option value={c.id} key={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
                   </select>
                 </label>
               )}
@@ -1449,13 +1383,9 @@ function Editor({
                 placeholder="e.g. Coffee & cafés"
               />
             </label>
-            <label>
-              Type
-              <select name="type" defaultValue={modal.item?.type ?? "expense"}>
-                <option value="expense">Expense</option>
-                <option value="income">Income</option>
-              </select>
-            </label>
+            <p className="form-hint">
+              Use this category for both income and expenses.
+            </p>
             <label>
               Description <span className="muted">Optional</span>
               <textarea
