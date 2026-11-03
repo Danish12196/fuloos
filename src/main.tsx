@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, type Session } from "./client";
+import { CsvImport } from "./CsvImport";
+import type { ImportTransaction } from "./csv";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   ArrowDownLeft,
@@ -78,6 +80,7 @@ function App() {
     [ledger, setLedger] = useState<Ledger>(emptyLedger),
     [page, setPage] = useState("Overview"),
     [modal, setModal] = useState<Modal>(null),
+    [importOpen, setImportOpen] = useState(false),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false),
@@ -151,6 +154,34 @@ function App() {
       }
       setModal(null);
     } finally {
+      setBusy(false);
+    }
+  }
+  async function importTransactions(
+    rows: ImportTransaction[],
+    progress: (n: number) => void,
+  ) {
+    if (busy) throw new Error("Another operation is running.");
+    setBusy(true);
+    const current = generation.current;
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        if (generation.current !== current)
+          throw new Error("Session changed. Please sign in again.");
+        validateTransaction(rows[i], ledger);
+        if (demo) {
+          setLedger((l) => ({
+            ...l,
+            transactions: [...l.transactions, { ...rows[i], id: demoId() }],
+          }));
+        } else {
+          if (!backend || !session) throw new Error("Please sign in.");
+          await backend.save("transactions", rows[i]);
+        }
+        progress(i + 1);
+      }
+    } finally {
+      if (!demo && generation.current === current) await load();
       setBusy(false);
     }
   }
@@ -713,6 +744,13 @@ function App() {
           {page === "Transactions" && (
             <section className="panel">
               <div className="filters">
+                <button
+                  className="button"
+                  disabled={busy || loading || !ledger.accounts.length}
+                  onClick={() => setImportOpen(true)}
+                >
+                  Import CSV
+                </button>
                 <label className="search">
                   <Search size={17} />
                   <input
@@ -765,6 +803,13 @@ function App() {
           </footer>
         </div>
       </main>
+      {importOpen && (
+        <CsvImport
+          ledger={ledger}
+          onClose={() => setImportOpen(false)}
+          onImport={importTransactions}
+        />
+      )}
       {modal && (
         <Editor
           modal={modal}
