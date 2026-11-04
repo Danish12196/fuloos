@@ -21,7 +21,7 @@ export class PocketBaseBackend {
   constructor(
     url: string,
     storage?: StorageLike,
-    fetcher: typeof fetch = (input, init) => fetch(input, init),
+    fetcher: typeof fetch = fetch,
   ) {
     this.storage = storage;
     this.fetcher = fetcher;

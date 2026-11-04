@@ -2032,3 +2032,62 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+/* Shared appearance controls and CSV actions. */
+.appearance-picker {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+.color-swatches {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.color-swatches button {
+  width: 30px;
+  height: 30px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+.color-swatches button[aria-pressed="true"] {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+.custom-color {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.custom-color input {
+  width: 56px;
+  height: 38px;
+  padding: 3px;
+}
+.csv-body input[type="file"]::file-selector-button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 16px;
+  margin-right: 12px;
+  background: var(--soft-surface);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.missing-categories {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 18px 0;
+}
+.missing-categories > div {
+  margin: 12px 0;
+}
+.csv-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+.csv-table select {
+  min-width: 160px;
+}

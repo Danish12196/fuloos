@@ -98,7 +98,56 @@ test("PocketBase migration defines neutral categories and tenant rules; SQLite g
       () => db.exec("UPDATE fuloos_accounts SET user_id='user-b' WHERE id='a'"),
       /ownership cannot be changed/,
     );
+    // Run the upgrade over an existing ledger, then exercise the replacement triggers.
+    const upgraded = new Map(collections.map((c) => [c.name, c]));
+    for (const c of upgraded.values()) {
+      const fields = c.fields as { name: string }[];
+      if (!fields) continue;
+      Object.assign(fields, {
+        add: (field: { name: string }) => fields.push(field),
+        getByName: (name: string) => fields.find((f) => f.name === name),
+      });
+    }
+    runInNewContext(
+      await readFile(
+        new URL(
+          "../pocketbase/pb_migrations/1793795400_import_appearance.js",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      {
+        migrate: (up: (app: unknown) => void) =>
+          up({
+            ...app,
+            findCollectionByNameOrId: (name: string) => upgraded.get(name),
+          }),
+        TextField: function (value: Record<string, unknown>) {
+          return value;
+        },
+      },
+    );
+    insert("'zero','user-a','expense',0,'a','','','2026-01-02'");
+    db.exec("UPDATE fuloos_transactions SET amount=0 WHERE id='t1'");
+    assert.throws(
+      () => insert("'negative','user-a','expense',-1,'a','','','2026-01-02'"),
+      /nonnegative/,
+    );
+    assert.throws(
+      () => insert("'cross','user-a','expense',0,'foreign','','','2026-01-02'"),
+      /same user/,
+    );
+    assert.throws(
+      () => insert("'self','user-a','transfer',0,'a','a','','2026-01-02'"),
+      /two different/,
+    );
+    assert.ok(
+      (upgraded.get("fuloos_accounts")!.fields as { name: string }[]).some(
+        (f) => f.name === "emoji",
+      ),
+    );
   } finally {
     db.close();
   }
 });
+

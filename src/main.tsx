@@ -1,3 +1,4 @@
+import { ColorPicker, EmojiField } from "./Appearance";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, type Session } from "./client";
@@ -530,7 +531,7 @@ function App() {
                           className="account-symbol"
                           style={{ background: a.color + "18", color: a.color }}
                         >
-                          <Wallet size={20} />
+                          {a.emoji || <Wallet size={20} />}
                         </span>
                         <span className="account-kind">{types[a.type]}</span>
                       </div>
@@ -644,7 +645,7 @@ function App() {
                         className="account-symbol"
                         style={{ background: a.color + "18", color: a.color }}
                       >
-                        <Wallet size={22} />
+                        {a.emoji || <Wallet size={22} />}
                       </span>
                       <span className="account-kind">{types[a.type]}</span>
                       <div className="row-actions">
@@ -709,7 +710,7 @@ function App() {
                       className="category-symbol"
                       style={{ color: c.color, background: c.color + "18" }}
                     >
-                      <Tags size={20} />
+                      {c.emoji || <Tags size={20} />}
                     </span>
                     <div>
                       <b>{c.name}</b>
@@ -745,7 +746,7 @@ function App() {
             <section className="panel">
               <div className="filters">
                 <button
-                  className="button"
+                  className="secondary"
                   disabled={busy || loading || !ledger.accounts.length}
                   onClick={() => setImportOpen(true)}
                 >
@@ -808,6 +809,9 @@ function App() {
           ledger={ledger}
           onClose={() => setImportOpen(false)}
           onImport={importTransactions}
+          onCreateCategory={async (value) => {
+            await save("categories", value);
+          }}
         />
       )}
       {modal && (
@@ -1204,6 +1208,7 @@ function Editor({
           opening_balance: minor(s("opening_balance")),
           opening_date: s("opening_date"),
           color: s("color"),
+          emoji: s("emoji"),
         };
         if (!value.name) throw new Error("Enter an account name.");
         if (
@@ -1223,6 +1228,7 @@ function Editor({
           name: s("name"),
           description: s("description"),
           color: s("color"),
+          emoji: s("emoji"),
         };
         if (!value.name) throw new Error("Enter a category name.");
         await save("categories", value, item?.id);
@@ -1462,17 +1468,13 @@ function Editor({
               Opening balances do not count as income. Phase 1 supports AED
               accounts.
             </p>
-            <label>
-              Account color
-              <input
-                type="color"
-                name="color"
-                defaultValue={
-                  modal.item?.color ??
-                  colors[ledger.accounts.length % colors.length]
-                }
-              />
-            </label>
+            <EmojiField defaultValue={modal.item?.emoji} />
+            <ColorPicker
+              defaultValue={
+                modal.item?.color ??
+                colors[ledger.accounts.length % colors.length]
+              }
+            />
           </>
         ) : (
           <>
@@ -1499,17 +1501,13 @@ function Editor({
                 placeholder="What belongs in this category?"
               />
             </label>
-            <label>
-              Category color
-              <input
-                type="color"
-                name="color"
-                defaultValue={
-                  modal.item?.color ??
-                  colors[ledger.categories.length % colors.length]
-                }
-              />
-            </label>
+            <EmojiField defaultValue={modal.item?.emoji} />
+            <ColorPicker
+              defaultValue={
+                modal.item?.color ??
+                colors[ledger.categories.length % colors.length]
+              }
+            />
           </>
         )}
         {error && (

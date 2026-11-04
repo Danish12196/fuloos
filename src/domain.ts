@@ -12,12 +12,14 @@ export interface Account {
   opening_balance: number;
   opening_date: string;
   color: string;
+  emoji?: string;
 }
 export interface Category {
   id: string;
   name: string;
   description: string;
   color: string;
+  emoji?: string;
 }
 export interface Transaction {
   id: string;
@@ -73,11 +75,11 @@ export function validateTransaction(
 ): void {
   if (
     !Number.isSafeInteger(t.amount) ||
-    t.amount <= 0 ||
+    t.amount < 0 ||
     t.amount > 100_000_000_000
   )
     throw new Error(
-      "Amount must be greater than zero and within the supported limit.",
+      "Amount must be zero or greater and within the supported limit.",
     );
   const source = ledger.accounts.find((a) => a.id === t.account_id);
   if (!source) throw new Error("Select an account.");
