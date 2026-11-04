@@ -110,3 +110,44 @@ test("split debit and credit, flipped signs, unknown categories", () => {
     )[0].error,
   );
 });
+
+test("zero values are valid and limits still apply", () => {
+  const rows = [
+    ["01/02/2026", "Adjustment", "0"],
+    ["01/02/2026", "Too large", "1000000000.01"],
+  ];
+  const result = previewCsv(rows, options, ledger);
+  assert.equal(result[0].transaction?.amount, 0);
+  assert.equal(result[0].error, "");
+  assert.ok(result[1].error);
+});
+test("transfers preserve direction, ignore categories and distinguish destination duplicates", () => {
+  const accounts = [
+    ledger.accounts[0],
+    { ...ledger.accounts[0], id: "b" },
+    { ...ledger.accounts[0], id: "c" },
+  ];
+  const result = previewCsv(
+    [
+      ["01/02/2026", "Payment", "1500"],
+      ["01/02/2026", "Payment", "-1500"],
+      ["01/02/2026", "Payment", "-1500"],
+    ],
+    { ...options, category: 1, transfers: { 0: "b", 1: "b", 2: "c" } },
+    { ...ledger, accounts },
+  );
+  assert.equal(result[0].transaction?.account_id, "b");
+  assert.equal(result[0].transaction?.to_account_id, "a");
+  assert.equal(result[1].transaction?.account_id, "a");
+  assert.equal(result[1].transaction?.to_account_id, "b");
+  assert.equal(result[1].transaction?.type, "transfer");
+  assert.equal(result[1].transaction?.category_id, null);
+  assert.equal(result[2].duplicate, false);
+  assert.ok(
+    previewCsv(
+      [["01/02/2026", "Payment", "-1"]],
+      { ...options, transfers: { 0: "a" } },
+      ledger,
+    )[0].error,
+  );
+});

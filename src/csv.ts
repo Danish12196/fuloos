@@ -6,6 +6,7 @@ import {
 } from "./domain.ts";
 export type ImportTransaction = Omit<Transaction, "id">;
 export interface CsvOptions {
+  transfers?: Record<number, string>;
   date: number;
   payee: number;
   notes: number;
@@ -104,6 +105,7 @@ export function transactionKey(t: ImportTransaction): string {
     t.account_id,
     t.date,
     t.type,
+    t.to_account_id,
     t.amount,
     t.payee.trim().toLowerCase().replace(/\s+/g, " "),
   ]);
@@ -143,16 +145,21 @@ export function previewCsv(
       const category = ledger.categories.find(
         (c) => c.name.toLowerCase() === categoryName.toLowerCase(),
       );
-      if (categoryName && !category)
+      const otherAccount = options.transfers?.[index];
+      if (!otherAccount && categoryName && !category)
         throw new Error(
           `Unknown category: ${categoryName}. Create it first or leave Category unmapped.`,
         );
       const transaction: ImportTransaction = {
         date: csvDate(get(options.date), options.dateFormat),
-        account_id: options.account,
-        to_account_id: null,
-        category_id: category?.id ?? null,
-        type: signed < 0 ? "expense" : "income",
+        account_id: otherAccount && signed > 0 ? otherAccount : options.account,
+        to_account_id: otherAccount
+          ? signed > 0
+            ? options.account
+            : otherAccount
+          : null,
+        category_id: otherAccount ? null : (category?.id ?? null),
+        type: otherAccount ? "transfer" : signed < 0 ? "expense" : "income",
         amount: Math.abs(signed),
         payee: get(options.payee),
         notes: get(options.notes),

@@ -1,3 +1,5 @@
+import { ColorPicker, EmojiField } from "./Appearance";
+import type { Category } from "./domain";
 import { useEffect, useRef, useState } from "react";
 import { money, type Ledger } from "./domain";
 import {
@@ -10,14 +12,18 @@ export function CsvImport({
   ledger,
   onClose,
   onImport,
+  onCreateCategory,
 }: {
   ledger: Ledger;
+  onCreateCategory: (value: Omit<Category, "id">) => Promise<void>;
   onClose: () => void;
   onImport: (
     rows: ImportTransaction[],
     progress: (n: number) => void,
   ) => Promise<void>;
 }) {
+  const [filter, setFilter] = useState("all");
+  const [creating, setCreating] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const [text, setText] = useState(""),
     [filename, setFilename] = useState(""),
@@ -62,6 +68,31 @@ export function CsvImport({
     ) ?? [];
   const data = header ? rows.slice(1) : rows;
   const preview = previewCsv(data, options, ledger);
+  const missingCategories = [
+    ...new Set(
+      data
+        .filter((_, i) => !options.transfers?.[i])
+        .map((r) => (r[options.category] ?? "").trim())
+        .filter(
+          (name) =>
+            name &&
+            !ledger.categories.some(
+              (c) => c.name.toLowerCase() === name.toLowerCase(),
+            ),
+        ),
+    ),
+  ];
+  const visible = preview.filter(
+    (r) =>
+      filter === "all" ||
+      (filter === "invalid"
+        ? !!r.error
+        : filter === "duplicates"
+          ? r.duplicate
+          : !!r.transaction &&
+            !excluded.has(r.index) &&
+            (!r.duplicate || includeDuplicates)),
+  );
   const selected = preview.filter(
     (r) =>
       r.transaction &&
@@ -69,7 +100,11 @@ export function CsvImport({
       (!r.duplicate || includeDuplicates),
   );
   function change<K extends keyof CsvOptions>(key: K, value: CsvOptions[K]) {
-    setOptions((o) => ({ ...o, [key]: value }));
+    setOptions((o) => ({
+      ...o,
+      [key]: value,
+      ...(key === "account" ? { transfers: {} } : {}),
+    }));
     setExcluded(new Set());
     setDone(false);
   }
@@ -111,6 +146,7 @@ export function CsvImport({
       const value = await file.text();
       setText(value);
       setFilename(file.name);
+      setOptions((o) => ({ ...o, transfers: {} }));
       setExcluded(new Set());
       setDone(false);
     } catch (e) {
@@ -171,7 +207,9 @@ export function CsvImport({
       <div className="csv-body">
         <p className="muted">
           Choose a bank CSV, match its columns, then review before importing.
-          Amounts are in AED. Transfers should be added separately.
+          Amounts are in AED. Mark transfers below and choose the other account.
+          Positive amounts arrive in the import account; negative amounts leave
+          it.
         </p>
         <fieldset disabled={busy || done || reading}>
           <label>
@@ -208,6 +246,7 @@ export function CsvImport({
                 value={delimiter}
                 onChange={(e) => {
                   setDelimiter(e.target.value);
+                  setOptions((o) => ({ ...o, transfers: {} }));
                   setExcluded(new Set());
                 }}
               >
@@ -226,6 +265,7 @@ export function CsvImport({
                 value={skip}
                 onChange={(e) => {
                   setSkip(Math.max(0, Number(e.target.value)));
+                  setOptions((o) => ({ ...o, transfers: {} }));
                   setExcluded(new Set());
                 }}
               />
@@ -263,6 +303,7 @@ export function CsvImport({
               checked={header}
               onChange={(e) => {
                 setHeader(e.target.checked);
+                setOptions((o) => ({ ...o, transfers: {} }));
                 setExcluded(new Set());
               }}
             />
@@ -297,14 +338,84 @@ export function CsvImport({
               )}
               {mapping("payee", "Payee / description")}
               {mapping("notes", "Notes")}
-              {mapping("category", "Category (existing names)")}
+              {mapping("category", "Category")}
             </div>
           )}
           <p className="muted small">
             Signed amounts: negative = expense, positive = income. Debit/credit
-            amounts must be positive. Unmapped categories stay uncategorized.
+            amounts must be zero or positive. Unmapped categories stay
+            uncategorized.
           </p>
         </fieldset>
+        {!!missingCategories.length && !done && (
+          <section className="missing-categories">
+            <h3>Missing categories</h3>
+            <p className="muted">
+              Create the categories you want to keep. Rows remain invalid until
+              their category is created, or leave Category unmapped.
+            </p>
+            {missingCategories.map((name) => (
+              <div key={name}>
+                <button
+                  className="secondary"
+                  disabled={busy || reading}
+                  onClick={() => setCreating(name)}
+                >
+                  Create {name}
+                </button>
+                {creating === name && (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const f = new FormData(e.currentTarget);
+                      setBusy(true);
+                      setError("");
+                      try {
+                        await onCreateCategory({
+                          name,
+                          description: String(f.get("description") ?? ""),
+                          color: String(f.get("color")),
+                          emoji: String(f.get("emoji") ?? ""),
+                        });
+                        setCreating(null);
+                      } catch (e) {
+                        setError((e as Error).message);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    <fieldset disabled={busy}>
+                      <p>{name}</p>
+                      {name.length > 80 && (
+                        <p role="alert">
+                          Correct this category name in the CSV: maximum 80
+                          characters.
+                        </p>
+                      )}
+                      <label>
+                        Description (optional)
+                        <input name="description" maxLength={500} />
+                      </label>
+                      <EmojiField />
+                      <ColorPicker />
+                      <button className="primary" disabled={name.length > 80}>
+                        Confirm creation
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setCreating(null)}
+                      >
+                        Cancel
+                      </button>
+                    </fieldset>
+                  </form>
+                )}
+              </div>
+            ))}
+          </section>
+        )}
         {(parseError || error) && (
           <p role="alert" className="notice">
             {parseError || error}
@@ -327,6 +438,23 @@ export function CsvImport({
               />
               Include possible duplicates (same account, date, amount and payee)
             </label>
+            <label>
+              Show rows
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              >
+                <option value="all">All rows ({preview.length})</option>
+                <option value="invalid">
+                  Invalid fields ({preview.filter((r) => r.error).length})
+                </option>
+                <option value="duplicates">
+                  Possible duplicates (
+                  {preview.filter((r) => r.duplicate).length})
+                </option>
+                <option value="selected">Selected ({selected.length})</option>
+              </select>
+            </label>
             <div className="csv-table">
               <table>
                 <thead>
@@ -336,11 +464,12 @@ export function CsvImport({
                     <th>Date</th>
                     <th>Payee</th>
                     <th>Amount</th>
+                    <th>Type / transfer account</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.map((r) => (
+                  {visible.map((r) => (
                     <tr key={r.index}>
                       <td>
                         <input
@@ -368,8 +497,16 @@ export function CsvImport({
                         />
                       </td>
                       <td>{r.index + skip + (header ? 2 : 1)}</td>
-                      <td>{r.transaction?.date ?? "—"}</td>
-                      <td>{r.transaction?.payee || "—"}</td>
+                      <td>
+                        {r.transaction?.date ??
+                          data[r.index]?.[options.date] ??
+                          "—"}
+                      </td>
+                      <td>
+                        {r.transaction?.payee ||
+                          data[r.index]?.[options.payee] ||
+                          "—"}
+                      </td>
                       <td>
                         {r.transaction
                           ? money(
@@ -377,6 +514,43 @@ export function CsvImport({
                                 (r.transaction.type === "expense" ? -1 : 1),
                             )
                           : "—"}
+                      </td>
+                      <td>
+                        <select
+                          aria-label={`Transfer account for row ${r.index + skip + (header ? 2 : 1)}`}
+                          disabled={busy || done}
+                          value={options.transfers?.[r.index] ?? ""}
+                          onChange={(e) =>
+                            change("transfers", {
+                              ...options.transfers,
+                              [r.index]: e.target.value,
+                            })
+                          }
+                        >
+                          <option value="">Income / expense</option>
+                          {ledger.accounts
+                            .filter((a) => a.id !== options.account)
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                Transfer · {a.name}
+                              </option>
+                            ))}
+                        </select>
+                        {r.transaction?.type === "transfer" && (
+                          <small>
+                            {
+                              ledger.accounts.find(
+                                (a) => a.id === r.transaction?.account_id,
+                              )?.name
+                            }{" "}
+                            →{" "}
+                            {
+                              ledger.accounts.find(
+                                (a) => a.id === r.transaction?.to_account_id,
+                              )?.name
+                            }
+                          </small>
+                        )}
                       </td>
                       <td>
                         {r.error ||
@@ -399,12 +573,12 @@ export function CsvImport({
         )}
       </div>
       <div className="modal-actions">
-        <button className="button" disabled={busy} onClick={onClose}>
+        <button className="secondary" disabled={busy} onClick={onClose}>
           {done ? "Done" : "Cancel"}
         </button>
         {!done && (
           <button
-            className="button primary"
+            className="primary"
             disabled={busy || reading || !!parseError || !selected.length}
             onClick={() => void submit()}
           >
