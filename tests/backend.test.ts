@@ -116,3 +116,15 @@ test("Google sign-in availability follows the configured Fuloos provider", async
     f.calls.every((call) => call.url.endsWith("/fuloos_users/auth-methods")),
   );
 });
+
+test("default browser fetch is not invoked with the backend as its receiver", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async function(this: unknown) {
+    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+    return json(auth);
+  } as typeof fetch;
+  try {
+    const backend = new PocketBaseBackend("https://pb.example.test");
+    assert.equal((await backend.signIn("test@example.test", "test-only-password")).user.id, "user-a");
+  } finally { globalThis.fetch = original; }
+});
