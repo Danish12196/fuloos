@@ -150,6 +150,100 @@ const batchResults = (count: number, offset = 0) =>
     status: 200,
     body: { ...bulkTransaction, id: `record${offset + i}` },
   }));
+
+test("single saves return server records with normalized relations without reloading the ledger", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json({
+      ...bulkTransaction,
+      id: "saved",
+      category_id: "",
+      to_account_id: "",
+    }),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const result = await f.backend.save("transactions", bulkTransaction, "saved");
+  assert.equal(result.id, "saved");
+  assert.equal(result.category_id, null);
+  assert.equal(result.to_account_id, null);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[1].init.method, "PATCH");
+});
+
+test("bulk updates use 100 PATCH operations per request, normalize relations and report confirmed progress", async () => {
+  const f = fixture();
+  const rows = Array.from({ length: 201 }, (_, i) => ({
+    ...bulkTransaction,
+    id: `record${i}`,
+  }));
+  f.queue.push(
+    json(auth),
+    json(batchResults(100)),
+    json(batchResults(100, 100)),
+    json(batchResults(1, 200)),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const progress: number[] = [];
+  await f.backend.updateTransactions(rows, (n, records) => {
+    progress.push(n);
+    assert.equal(records[0].category_id, null);
+  });
+  assert.deepEqual(progress, [100, 200, 201]);
+  assert.equal(f.calls.length, 4);
+  const requests = JSON.parse(String(f.calls[1].init.body)).requests;
+  assert.equal(requests.length, 100);
+  assert.equal(requests[0].method, "PATCH");
+  assert.equal(
+    requests[0].url,
+    "/api/collections/fuloos_transactions/records/record0",
+  );
+  assert.equal(requests[0].body.user_id, "user-a");
+  assert.equal(requests[0].body.category_id, "");
+  assert.equal(requests[0].body.id, undefined);
+});
+
+test("bulk update failures retain earlier progress and stop; uncertain results and session changes never advance progress", async () => {
+  const rows = Array.from({ length: 101 }, (_, i) => ({
+    ...bulkTransaction,
+    id: `record${i}`,
+  }));
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json(batchResults(100)),
+    json({ message: "Invalid update" }, 400),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const progress: number[] = [];
+  await assert.rejects(
+    f.backend.updateTransactions(rows, (n) => progress.push(n)),
+    /Invalid update/,
+  );
+  assert.deepEqual(progress, [100]);
+  f.queue.push(json(batchResults(100)));
+  await assert.rejects(
+    f.backend.updateTransactions(rows, () => f.backend.signOut()),
+    /Session changed/,
+  );
+  f.queue.push(json(auth));
+  await f.backend.signIn("test@example.test", "test-only-password");
+  await assert.rejects(
+    f.backend.updateTransactions(rows, () =>
+      assert.fail("Unconfirmed results"),
+    ),
+    /may have been saved/,
+  );
+  f.queue.push(
+    json([{ status: 200, body: { ...bulkTransaction, id: "wrong" } }]),
+  );
+  await assert.rejects(
+    f.backend.updateTransactions(rows.slice(0, 1), () =>
+      assert.fail("Wrong record"),
+    ),
+    /unexpected batch result/,
+  );
+});
 test("1001 transactions use 11 batch writes, preserve ownership and report committed progress", async () => {
   const f = fixture();
   f.queue.push(json(auth));
@@ -274,3 +368,4 @@ test("batch imports stop when the session changes and warn on uncertain network 
     /may have been saved.*Reload/,
   );
 });
+
