@@ -2106,3 +2106,64 @@ button {
   gap: 12px;
   margin: 16px 0;
 }
+
+.import-progress {
+  margin: 18px 0;
+}
+.import-progress-label {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.import-progress progress {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--active-surface);
+  accent-color: var(--green);
+}
+.import-progress progress::-webkit-progress-bar {
+  background: var(--active-surface);
+  border-radius: 999px;
+}
+.import-progress progress::-webkit-progress-value {
+  background: var(--green);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+.import-progress progress::-moz-progress-bar {
+  background: var(--green);
+  border-radius: 999px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .import-progress progress::-webkit-progress-value {
+    transition: none;
+  }
+}
+
+.csv-modal[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.csv-modal .modal-head,
+.csv-modal .modal-actions {
+  flex-shrink: 0;
+}
+.csv-modal .csv-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+.csv-modal .modal-actions {
+  flex-wrap: wrap;
+}
+.csv-modal .modal-actions > .import-progress {
+  flex-basis: 100%;
+  margin: 0 0 6px;
+}

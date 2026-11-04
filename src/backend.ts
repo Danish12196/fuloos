@@ -5,6 +5,12 @@ export interface Session {
   user: { id: string; email: string };
 }
 export type Table = "accounts" | "categories" | "transactions";
+type RecordTypes = {
+  accounts: Account;
+  categories: Category;
+  transactions: Transaction;
+};
+export const IMPORT_BATCH_SIZE = 100;
 type AuthResponse = { token: string; record: { id: string; email: string } };
 interface StorageLike {
   getItem(key: string): string | null;
@@ -82,6 +88,10 @@ export class PocketBaseBackend {
         signal: AbortSignal.timeout(20000),
       });
     } catch {
+      if (path === "/api/batch")
+        throw new Error(
+          "Could not confirm the batch result. It may have been saved. Reload the ledger before retrying.",
+        );
       throw new Error(
         "Could not reach PocketBase. Check the connection and try again.",
       );
@@ -99,6 +109,35 @@ export class PocketBaseBackend {
         throw new Error(
           "Fuloos backend is not configured yet. Install the PocketBase migration before using live accounts.",
         );
+      if (
+        path === "/api/batch" &&
+        response.status === 403 &&
+        data?.message === "Batch requests are not allowed."
+      )
+        throw new Error(
+          "Bulk imports are disabled on the server. Enable Batch requests in PocketBase Settings → Application with a maximum of at least 100 requests.",
+        );
+      if (path === "/api/batch" && data?.data?.requests) {
+        const failures = Object.entries(data.data.requests) as [
+          string,
+          {
+            response?: {
+              message?: string;
+              data?: Record<string, { message?: string }>;
+            };
+          },
+        ][];
+        const first = failures[0];
+        if (first) {
+          const details = Object.values(first[1].response?.data ?? {})
+            .map((v) => v.message)
+            .filter(Boolean)
+            .join(" ");
+          throw new Error(
+            `Batch item ${Number(first[0]) + 1} failed: ${details || first[1].response?.message || "Invalid record."} No records in this batch were saved.`,
+          );
+        }
+      }
       const details =
         data?.data && typeof data.data === "object"
           ? Object.values(data.data)
@@ -237,6 +276,54 @@ export class PocketBaseBackend {
       `/api/collections/fuloos_${table}/records${id ? "/" + encodeURIComponent(id) : ""}`,
       { method: id ? "PATCH" : "POST", body: JSON.stringify(body) },
     );
+  }
+  async createMany<K extends Table>(
+    table: K,
+    values: Omit<RecordTypes[K], "id">[],
+    progress: (saved: number, records: RecordTypes[K][]) => void,
+    shouldContinue: () => boolean = () => true,
+  ): Promise<void> {
+    const session = this.session;
+    if (!session) throw new Error("Please sign in.");
+    for (let offset = 0; offset < values.length; offset += IMPORT_BATCH_SIZE) {
+      if (this.session?.user.id !== session.user.id || !shouldContinue())
+        throw new Error("Session changed. Please sign in again.");
+      const chunk = values.slice(offset, offset + IMPORT_BATCH_SIZE);
+      const result = await this.request<
+        { status: number; body: RecordTypes[K] }[]
+      >("/api/batch", {
+        method: "POST",
+        body: JSON.stringify({
+          requests: chunk.map((value) => {
+            const body: Record<string, unknown> = {
+              ...value,
+              user_id: session.user.id,
+            };
+            for (const key of ["to_account_id", "category_id"])
+              if (body[key] === null) body[key] = "";
+            return {
+              method: "POST",
+              url: `/api/collections/fuloos_${table}/records`,
+              body,
+            };
+          }),
+        }),
+      });
+      if (
+        !Array.isArray(result) ||
+        result.length !== chunk.length ||
+        result.some((r) => r.status < 200 || r.status >= 300 || !r.body?.id)
+      )
+        throw new Error(
+          "The server returned an unexpected batch result. Reload the ledger before retrying.",
+        );
+      if (this.session?.user.id !== session.user.id || !shouldContinue())
+        throw new Error("Session changed. Reload the ledger before retrying.");
+      progress(
+        offset + chunk.length,
+        result.map((r) => r.body),
+      );
+    }
   }
   async remove(table: Table, id: string): Promise<void> {
     if (!this.session) throw new Error("Please sign in.");
