@@ -1,3 +1,4 @@
+import { ImportProgress } from "./ImportProgress";
 import { ColorPicker, EmojiField } from "./Appearance";
 import type { Category } from "./domain";
 import { useEffect, useRef, useState } from "react";
@@ -13,8 +14,13 @@ export function CsvImport({
   onClose,
   onImport,
   onCreateCategory,
+  onCreateCategories,
 }: {
   ledger: Ledger;
+  onCreateCategories: (
+    values: Omit<Category, "id">[],
+    progress: (saved: number) => void,
+  ) => Promise<void>;
   onCreateCategory: (value: Omit<Category, "id">) => Promise<void>;
   onClose: () => void;
   onImport: (
@@ -25,6 +31,7 @@ export function CsvImport({
   const [filter, setFilter] = useState("all");
   const [manualCategories, setManualCategories] = useState(false);
   const [creatingAll, setCreatingAll] = useState(false);
+  const [categoryCounts, setCategoryCounts] = useState({ saved: 0, total: 0 });
   const [categoryProgress, setCategoryProgress] = useState("");
   const [creating, setCreating] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -101,22 +108,27 @@ export function CsvImport({
     setError("");
     setCreating(null);
     setCreatingAll(true);
+    setCategoryCounts({ saved: 0, total: names.length });
     let saved = 0;
     try {
-      for (const name of names) {
-        setCategoryProgress(
-          `Creating categories ${saved + 1} of ${names.length}…`,
-        );
-        await onCreateCategory({
+      setCategoryProgress(`Creating ${names.length} categories…`);
+      await onCreateCategories(
+        names.map((name) => ({
           name,
           description: "",
           emoji: "",
           color: `#${Math.floor(Math.random() * 16777216)
             .toString(16)
             .padStart(6, "0")}`,
-        });
-        saved++;
-      }
+        })),
+        (count) => {
+          saved = count;
+          setCategoryCounts({ saved: count, total: names.length });
+          setCategoryProgress(
+            `Created ${count} of ${names.length} categories…`,
+          );
+        },
+      );
       setCategoryProgress(
         `Created ${saved} categories. You can customize them later in Categories.`,
       );
@@ -195,6 +207,9 @@ export function CsvImport({
       setText(value);
       setFilename(file.name);
       setCategoryProgress("");
+      setCategoryCounts({ saved: 0, total: 0 });
+      setProgress(0);
+      setTotal(0);
       setCreating(null);
       setOptions((o) => ({ ...o, transfers: {} }));
       setExcluded(new Set());
@@ -635,16 +650,32 @@ export function CsvImport({
             </div>
           </>
         )}
-        {busy && !creatingAll && !creating && (
-          <p role="status">
-            Imported {progress} of {total}…
-          </p>
-        )}
         {done && (
           <p role="status">Imported {progress} transactions successfully.</p>
         )}
       </div>
       <div className="modal-actions">
+        {categoryCounts.total > 0 && total === 0 && (
+          <ImportProgress
+            label="Categories created"
+            value={categoryCounts.saved}
+            total={categoryCounts.total}
+          />
+        )}
+        {total > 0 && (
+          <ImportProgress
+            label="Transactions imported"
+            value={progress}
+            total={total}
+          />
+        )}
+        {reading && (
+          <div className="import-progress">
+            <p role="status">Reading CSV file…</p>
+            <progress aria-label="Reading CSV file" />
+          </div>
+        )}
+
         <button className="secondary" disabled={busy} onClick={onClose}>
           {done ? "Done" : "Cancel"}
         </button>

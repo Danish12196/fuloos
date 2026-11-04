@@ -119,12 +119,158 @@ test("Google sign-in availability follows the configured Fuloos provider", async
 
 test("default browser fetch is not invoked with the backend as its receiver", async () => {
   const original = globalThis.fetch;
-  globalThis.fetch = async function(this: unknown) {
-    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
+  globalThis.fetch = async function (this: unknown) {
+    if (this !== undefined && this !== globalThis)
+      throw new TypeError("Illegal invocation");
     return json(auth);
   } as typeof fetch;
   try {
     const backend = new PocketBaseBackend("https://pb.example.test");
-    assert.equal((await backend.signIn("test@example.test", "test-only-password")).user.id, "user-a");
-  } finally { globalThis.fetch = original; }
+    assert.equal(
+      (await backend.signIn("test@example.test", "test-only-password")).user.id,
+      "user-a",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+const bulkTransaction = {
+  type: "transfer" as const,
+  amount: 0,
+  account_id: "from",
+  to_account_id: "to",
+  category_id: null,
+  date: "2026-11-04",
+  payee: "Payment",
+  notes: "",
+};
+const batchResults = (count: number, offset = 0) =>
+  Array.from({ length: count }, (_, i) => ({
+    status: 200,
+    body: { ...bulkTransaction, id: `record${offset + i}` },
+  }));
+test("1001 transactions use 11 batch writes, preserve ownership and report committed progress", async () => {
+  const f = fixture();
+  f.queue.push(json(auth));
+  await f.backend.signIn("test@example.test", "test-only-password");
+  for (let offset = 0; offset < 1001; offset += 100)
+    f.queue.push(json(batchResults(Math.min(100, 1001 - offset), offset)));
+  const progress: number[] = [];
+  await f.backend.createMany(
+    "transactions",
+    Array.from({ length: 1001 }, () => ({
+      ...bulkTransaction,
+      user_id: "spoof",
+    })),
+    (n) => progress.push(n),
+  );
+  assert.equal(f.calls.length, 12); // one auth request plus 11 batch writes
+  assert.deepEqual(progress, [
+    ...Array.from({ length: 10 }, (_, i) => (i + 1) * 100),
+    1001,
+  ]);
+  const requests = JSON.parse(String(f.calls[1].init.body)).requests;
+  assert.equal(requests.length, 100);
+  assert.equal(f.calls[1].url, "https://pb.example.test/api/batch");
+  assert.equal(
+    new Headers(f.calls[1].init.headers).get("Authorization"),
+    "user-token",
+  );
+  assert.equal(requests[0].url, "/api/collections/fuloos_transactions/records");
+  assert.equal(requests[0].body.user_id, "user-a");
+  assert.equal(requests[0].body.category_id, "");
+  assert.equal(requests[0].body.to_account_id, "to");
+  assert.equal(requests[0].body.amount, 0);
+});
+test("failed batches stop writes and advance progress only for successful batches", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json(batchResults(100)),
+    json(
+      {
+        message: "Batch transaction failed.",
+        data: {
+          requests: {
+            0: {
+              response: {
+                message: "Failed to create record.",
+                data: { amount: { message: "Invalid amount." } },
+              },
+            },
+          },
+        },
+      },
+      400,
+    ),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const progress: number[] = [];
+  await assert.rejects(
+    f.backend.createMany(
+      "transactions",
+      Array.from({ length: 120 }, () => bulkTransaction),
+      (n) => progress.push(n),
+    ),
+    /Invalid amount.*No records in this batch were saved/,
+  );
+  assert.deepEqual(progress, [100]);
+  assert.equal(f.calls.length, 3);
+});
+test("20 categories use one batch and disabled batching never falls back to individual writes", async () => {
+  const f = fixture();
+  const categories = Array.from({ length: 20 }, (_, i) => ({
+    name: `Category ${i}`,
+    description: "",
+    emoji: "",
+    color: "#123456",
+  }));
+  f.queue.push(
+    json(auth),
+    json(
+      categories.map((c, i) => ({
+        status: 200,
+        body: { ...c, id: `cat${i}` },
+      })),
+    ),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  let saved = 0;
+  await f.backend.createMany("categories", categories, (n) => {
+    saved = n;
+  });
+  assert.equal(saved, 20);
+  assert.equal(f.calls.length, 2);
+  assert.equal(JSON.parse(String(f.calls[1].init.body)).requests.length, 20);
+  f.queue.push(
+    json({ message: "Batch requests are not allowed.", data: {} }, 403),
+  );
+  await assert.rejects(
+    f.backend.createMany("categories", categories, () => {}),
+    /Enable Batch requests/,
+  );
+  assert.equal(f.calls.length, 3);
+});
+test("batch imports stop when the session changes and warn on uncertain network results", async () => {
+  const f = fixture();
+  f.queue.push(json(auth), json(batchResults(100)));
+  await f.backend.signIn("test@example.test", "test-only-password");
+  await assert.rejects(
+    f.backend.createMany(
+      "transactions",
+      Array.from({ length: 160 }, () => bulkTransaction),
+      () => f.backend.signOut(),
+    ),
+    /Session changed/,
+  );
+  assert.equal(f.calls.length, 2);
+  f.queue.push(json(auth));
+  await f.backend.signIn("test@example.test", "test-only-password");
+  await assert.rejects(
+    f.backend.createMany("transactions", [bulkTransaction], () =>
+      assert.fail("Unconfirmed write must not advance progress"),
+    ),
+    /may have been saved.*Reload/,
+  );
 });

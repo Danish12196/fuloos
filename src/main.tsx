@@ -166,20 +166,63 @@ function App() {
     setBusy(true);
     const current = generation.current;
     try {
-      for (let i = 0; i < rows.length; i++) {
-        if (generation.current !== current)
-          throw new Error("Session changed. Please sign in again.");
-        validateTransaction(rows[i], ledger);
-        if (demo) {
-          setLedger((l) => ({
-            ...l,
-            transactions: [...l.transactions, { ...rows[i], id: demoId() }],
-          }));
-        } else {
-          if (!backend || !session) throw new Error("Please sign in.");
-          await backend.save("transactions", rows[i]);
-        }
-        progress(i + 1);
+      rows.forEach((row) => validateTransaction(row, ledger));
+      if (demo) {
+        setLedger((l) => ({
+          ...l,
+          transactions: [
+            ...l.transactions,
+            ...rows.map((row) => ({ ...row, id: demoId() })),
+          ],
+        }));
+        progress(rows.length);
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.createMany(
+          "transactions",
+          rows,
+          (saved) => progress(saved),
+          () => generation.current === current,
+        );
+      }
+    } finally {
+      if (!demo && generation.current === current) await load();
+      setBusy(false);
+    }
+  }
+  async function createCategories(
+    rows: Omit<Category, "id">[],
+    progress: (n: number) => void,
+  ) {
+    if (busy) throw new Error("Another operation is running.");
+    setBusy(true);
+    const current = generation.current;
+    try {
+      if (rows.some((row) => !row.name.trim() || row.name.length > 80))
+        throw new Error("Category names must contain 1–80 characters.");
+      if (demo) {
+        setLedger((l) => ({
+          ...l,
+          categories: [
+            ...l.categories,
+            ...rows.map((row) => ({ ...row, id: demoId() })),
+          ],
+        }));
+        progress(rows.length);
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.createMany(
+          "categories",
+          rows,
+          (saved, records) => {
+            setLedger((l) => ({
+              ...l,
+              categories: [...l.categories, ...records],
+            }));
+            progress(saved);
+          },
+          () => generation.current === current,
+        );
       }
     } finally {
       if (!demo && generation.current === current) await load();
@@ -809,6 +852,7 @@ function App() {
           ledger={ledger}
           onClose={() => setImportOpen(false)}
           onImport={importTransactions}
+          onCreateCategories={createCategories}
           onCreateCategory={async (value) => {
             await save("categories", value);
           }}
