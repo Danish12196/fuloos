@@ -1,5 +1,6 @@
+import { BulkEdit } from "./BulkEdit";
 import { ColorPicker, EmojiField } from "./Appearance";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, type Session } from "./client";
 import { CsvImport } from "./CsvImport";
@@ -91,7 +92,57 @@ function App() {
     [month, setMonth] = useState(today().slice(0, 7)),
     [view, setView] = useState("month"),
     [hidden, setHidden] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
   const generation = useRef(0);
+  useEffect(() => {
+    setSelected(new Set());
+    setBulkItems(null);
+  }, [session?.user.id, demo]);
+  function toggleSelection(id: string) {
+    setSelected((old) => {
+      const next = new Set(old);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function updateTransactions(records: Transaction[]) {
+    const byId = new Map(records.map((t) => [t.id, t]));
+    setLedger((l) => ({
+      ...l,
+      transactions: l.transactions.map((t) => byId.get(t.id) ?? t),
+    }));
+    setSelected((old) => new Set([...old].filter((id) => !byId.has(id))));
+  }
+  async function bulkUpdate(
+    rows: Transaction[],
+    progress: (records: Transaction[]) => void,
+  ) {
+    if (busy) throw new Error("Another operation is running.");
+    rows.forEach((t) => validateTransaction(t, ledger));
+    const current = generation.current;
+    setBusy(true);
+    try {
+      if (demo) {
+        updateTransactions(rows);
+        progress(rows);
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.updateTransactions(
+          rows,
+          (_n, records) => {
+            if (current !== generation.current) return;
+            updateTransactions(records);
+            progress(records);
+          },
+          () => current === generation.current,
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
   useEffect(() => {
     if (!backend) return;
     backend
@@ -137,6 +188,7 @@ function App() {
   ) {
     if (busy) return;
     setBusy(true);
+    const current = generation.current;
     try {
       if (demo) {
         const next = { ...value, id: id ?? demoId() };
@@ -151,8 +203,17 @@ function App() {
         );
       } else {
         if (!backend || !session) throw new Error("Please sign in.");
-        await backend.save(table, value, id);
-        await load();
+        const record = await backend.save(table, value, id);
+        if (current !== generation.current) return;
+        setLedger(
+          (l) =>
+            ({
+              ...l,
+              [table]: id
+                ? l[table].map((v) => (v.id === id ? record : v))
+                : [...l[table], record],
+            }) as Ledger,
+        );
       }
       setModal(null);
     } finally {
@@ -257,8 +318,14 @@ function App() {
         }));
       else {
         if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
         await backend.remove(table, id);
-        await load();
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          [table]: l[table].filter((v) => v.id !== id),
+        }));
+        setSelected((old) => new Set([...old].filter((value) => value !== id)));
       }
     } catch (e) {
       setError(message(e));
@@ -272,10 +339,19 @@ function App() {
   const end = new Date(`${month}-01T00:00:00Z`);
   end.setUTCMonth(end.getUTCMonth() + 1);
   const start = new Date(`${month}-01T00:00:00Z`);
-  if (view === "3" || view === "6" || view === "12") start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
+  if (view === "3" || view === "6" || view === "12")
+    start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
   if (view === "ytd") start.setUTCMonth(0);
-  const rangeLabel = view === "all" ? "All time" : `${start.toISOString().slice(0, 10)} – ${new Date(end.getTime() - 86400000).toISOString().slice(0, 10)}`;
-  const monthly = ledger.transactions.filter((t) => view === "all" || (t.date >= start.toISOString().slice(0, 10) && t.date < end.toISOString().slice(0, 10))),
+  const rangeLabel =
+    view === "all"
+      ? "All time"
+      : `${start.toISOString().slice(0, 10)} – ${new Date(end.getTime() - 86400000).toISOString().slice(0, 10)}`;
+  const monthly = ledger.transactions.filter(
+      (t) =>
+        view === "all" ||
+        (t.date >= start.toISOString().slice(0, 10) &&
+          t.date < end.toISOString().slice(0, 10)),
+    ),
     summary = totals(monthly),
     net = ledger.accounts.reduce(
       (s, a) => s + balance(a, ledger.transactions),
@@ -478,10 +554,24 @@ function App() {
               Loading your workspace…
             </div>
           )}
-          {(page === "Overview" || page === "Transactions" || page === "Reports") && (
+          {(page === "Overview" ||
+            page === "Transactions" ||
+            page === "Reports") && (
             <div className="period-row">
-              <select aria-label="Date range" value={view} onChange={(e) => { setView(e.target.value); setMonth(today().slice(0, 7)); }}>
-                <option value="month">Month</option><option value="3">3 months</option><option value="6">6 months</option><option value="ytd">Year to date</option><option value="12">1 year</option><option value="all">All time</option>
+              <select
+                aria-label="Date range"
+                value={view}
+                onChange={(e) => {
+                  setView(e.target.value);
+                  setMonth(today().slice(0, 7));
+                }}
+              >
+                <option value="month">Month</option>
+                <option value="3">3 months</option>
+                <option value="6">6 months</option>
+                <option value="ytd">Year to date</option>
+                <option value="12">1 year</option>
+                <option value="all">All time</option>
               </select>
               <div className="month-control">
                 <button
@@ -505,9 +595,7 @@ function App() {
                   <ChevronRight size={17} />
                 </button>
               </div>
-              <span className="muted">
-                {rangeLabel}
-              </span>
+              <span className="muted">{rangeLabel}</span>
             </div>
           )}
           {page === "Overview" && (
@@ -614,7 +702,13 @@ function App() {
                 <section className="panel spending">
                   <div className="panel-heading">
                     <div>
-                      <button className="text-button" onClick={() => setPage("Reports")}><h2>Where it went</h2><ArrowRight size={16} /></button>
+                      <button
+                        className="text-button"
+                        onClick={() => setPage("Reports")}
+                      >
+                        <h2>Where it went</h2>
+                        <ArrowRight size={16} />
+                      </button>
                       <p>Your spending by category</p>
                     </div>
                     <Tags size={18} className="muted" />
@@ -683,10 +777,43 @@ function App() {
           )}
           {page === "Reports" && (
             <section className="panel">
-              <div className="panel-heading"><h2>Where it went</h2><span>{rangeLabel}</span></div>
-              <div className="filters"><b>Income {concealed(summary.income)}</b><b>Expenses {concealed(summary.expense)}</b><b>Net cash flow {concealed(summary.income - summary.expense)}</b></div>
-              {spending.map(c => <div className="category-item" key={c.id}><span className="category-symbol" style={{color: c.color}}><Tags size={20}/></span><div><b>{c.name}</b><p>{(c.total / summary.expense * 100).toFixed(1)}% of spending</p><progress aria-label={`${c.name} share of spending`} value={c.total} max={summary.expense}/></div><strong>{concealed(c.total)}</strong></div>)}
-              {!spending.length && <Empty title="No spending in this period" text="Choose another date range to explore your spending."/>}
+              <div className="panel-heading">
+                <h2>Where it went</h2>
+                <span>{rangeLabel}</span>
+              </div>
+              <div className="filters">
+                <b>Income {concealed(summary.income)}</b>
+                <b>Expenses {concealed(summary.expense)}</b>
+                <b>
+                  Net cash flow {concealed(summary.income - summary.expense)}
+                </b>
+              </div>
+              {spending.map((c) => (
+                <div className="category-item" key={c.id}>
+                  <span className="category-symbol" style={{ color: c.color }}>
+                    <Tags size={20} />
+                  </span>
+                  <div>
+                    <b>{c.name}</b>
+                    <p>
+                      {((c.total / summary.expense) * 100).toFixed(1)}% of
+                      spending
+                    </p>
+                    <progress
+                      aria-label={`${c.name} share of spending`}
+                      value={c.total}
+                      max={summary.expense}
+                    />
+                  </div>
+                  <strong>{concealed(c.total)}</strong>
+                </div>
+              ))}
+              {!spending.length && (
+                <Empty
+                  title="No spending in this period"
+                  text="Choose another date range to explore your spending."
+                />
+              )}
             </section>
           )}
           {page === "Accounts" && (
@@ -849,7 +976,55 @@ function App() {
                   {filtered.length} transactions
                 </span>
               </div>
+              <div className="bulk-toolbar">
+                <label className="selection-label">
+                  <input
+                    type="checkbox"
+                    disabled={busy || loading || !filtered.length}
+                    checked={
+                      filtered.length > 0 &&
+                      filtered.every((t) => selected.has(t.id))
+                    }
+                    onChange={(e) =>
+                      setSelected((old) => {
+                        const next = new Set(old);
+                        for (const t of filtered) {
+                          if (e.target.checked) next.add(t.id);
+                          else next.delete(t.id);
+                        }
+                        return next;
+                      })
+                    }
+                  />
+                  Select all {filtered.length} results
+                </label>
+                <span>
+                  {selected.size} selected ·{" "}
+                  {filtered.filter((t) => selected.has(t.id)).length} in these
+                  results
+                </span>
+                <button
+                  className="secondary"
+                  disabled={busy || loading || !selected.size}
+                  onClick={() =>
+                    setBulkItems(
+                      ledger.transactions.filter((t) => selected.has(t.id)),
+                    )
+                  }
+                >
+                  Edit selected
+                </button>
+                <button
+                  className="text-button"
+                  disabled={busy || !selected.size}
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear selection
+                </button>
+              </div>
               <TransactionList
+                selected={selected}
+                onSelect={toggleSelection}
                 items={filtered}
                 ledger={ledger}
                 concealed={concealed}
@@ -866,6 +1041,16 @@ function App() {
           </footer>
         </div>
       </main>
+      {bulkItems && (
+        <BulkEdit
+          items={bulkItems}
+          ledger={ledger}
+          onClose={() => {
+            if (!busy) setBulkItems(null);
+          }}
+          onApply={bulkUpdate}
+        />
+      )}
       {importOpen && (
         <CsvImport
           ledger={ledger}
@@ -914,7 +1099,11 @@ function TransactionList({
   onEdit,
   onDelete,
   busy,
+  selected,
+  onSelect,
 }: {
+  selected?: Set<string>;
+  onSelect?: (id: string) => void;
   items: Transaction[];
   ledger: Ledger;
   concealed: (v: number) => string;
@@ -922,22 +1111,57 @@ function TransactionList({
   onDelete?: (t: Transaction) => void;
   busy?: boolean;
 }) {
-  const balances = new Map<string, Map<string, number>>();
-  const running = new Map(ledger.accounts.map(a => [a.id, a.opening_balance]));
-  // IDs provide a consistent order where only a transaction date is available.
-  for (const t of [...ledger.transactions].sort((a,b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
-    running.set(t.account_id, (running.get(t.account_id) ?? 0) + (t.type === "income" ? t.amount : -t.amount));
-    if (t.to_account_id) running.set(t.to_account_id, (running.get(t.to_account_id) ?? 0) + t.amount);
-    balances.set(t.id, new Map(running));
-  }
+  const balances = useMemo(() => {
+    const result = new Map<string, { source: number; destination: number }>();
+    const running = new Map(
+      ledger.accounts.map((a) => [a.id, a.opening_balance]),
+    );
+    // IDs provide a consistent order where only a transaction date is available.
+    for (const t of [...ledger.transactions].sort(
+      (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
+    )) {
+      running.set(
+        t.account_id,
+        (running.get(t.account_id) ?? 0) +
+          (t.type === "income" ? t.amount : -t.amount),
+      );
+      if (t.to_account_id)
+        running.set(
+          t.to_account_id,
+          (running.get(t.to_account_id) ?? 0) + t.amount,
+        );
+      result.set(t.id, {
+        source: running.get(t.account_id) ?? 0,
+        destination: t.to_account_id ? (running.get(t.to_account_id) ?? 0) : 0,
+      });
+    }
+    return result;
+  }, [ledger.accounts, ledger.transactions]);
   return items.length ? (
     <div className="transaction-list">
       {items.map((t) => {
         const category = ledger.categories.find((c) => c.id === t.category_id);
         const account = ledger.accounts.find((a) => a.id === t.account_id);
         return (
-          <div className="transaction-row" key={t.id}>
-            <button className="transaction-main" onClick={() => onEdit(t)}>
+          <div
+            className={`transaction-row ${selected?.has(t.id) ? "is-selected" : ""}`}
+            key={t.id}
+          >
+            {onSelect && (
+              <input
+                className="transaction-select"
+                type="checkbox"
+                aria-label={`Select ${t.payee || "transaction"} on ${t.date}`}
+                disabled={busy}
+                checked={selected?.has(t.id) ?? false}
+                onChange={() => onSelect(t.id)}
+              />
+            )}
+            <button
+              className="transaction-main"
+              disabled={busy}
+              onClick={() => onEdit(t)}
+            >
               <span
                 className={`transaction-icon ${t.type}`}
                 style={
@@ -971,8 +1195,19 @@ function TransactionList({
                 </small>
               </span>
               <span className="transaction-value">
-                <small>{account?.name}: {concealed(balances.get(t.id)?.get(t.account_id) ?? 0)} balance</small>
-                {t.to_account_id && <small>{ledger.accounts.find(a => a.id === t.to_account_id)?.name}: {concealed(balances.get(t.id)?.get(t.to_account_id) ?? 0)} balance</small>}
+                <small>
+                  {account?.name}: {concealed(balances.get(t.id)?.source ?? 0)}{" "}
+                  balance
+                </small>
+                {t.to_account_id && (
+                  <small>
+                    {
+                      ledger.accounts.find((a) => a.id === t.to_account_id)
+                        ?.name
+                    }
+                    : {concealed(balances.get(t.id)?.destination ?? 0)} balance
+                  </small>
+                )}
                 <b className={t.type === "income" ? "green-text" : ""}>
                   {t.type === "income" ? "+" : t.type === "expense" ? "−" : ""}
                   {concealed(t.amount)}

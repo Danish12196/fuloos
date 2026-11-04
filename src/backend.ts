@@ -115,7 +115,7 @@ export class PocketBaseBackend {
         data?.message === "Batch requests are not allowed."
       )
         throw new Error(
-          "Bulk imports are disabled on the server. Enable Batch requests in PocketBase Settings → Application with a maximum of at least 100 requests.",
+          "Bulk changes are disabled on the server. Enable Batch requests in PocketBase Settings → Application with a maximum of at least 100 requests.",
         );
       if (path === "/api/batch" && data?.data?.requests) {
         const failures = Object.entries(data.data.requests) as [
@@ -259,12 +259,13 @@ export class PocketBaseBackend {
       })),
     };
   }
-  async save(
-    table: Table,
+  async save<K extends Table>(
+    table: K,
     value: Record<string, unknown>,
     id?: string,
-  ): Promise<void> {
+  ): Promise<RecordTypes[K]> {
     if (!this.session) throw new Error("Please sign in.");
+    const session = this.session;
     const body: Record<string, unknown> = {
       ...value,
       user_id: this.session.user.id,
@@ -272,10 +273,77 @@ export class PocketBaseBackend {
     for (const key of ["to_account_id", "category_id"])
       if (body[key as keyof typeof body] === null)
         Object.assign(body, { [key]: "" });
-    await this.request(
+    const record = await this.request<RecordTypes[K]>(
       `/api/collections/fuloos_${table}/records${id ? "/" + encodeURIComponent(id) : ""}`,
       { method: id ? "PATCH" : "POST", body: JSON.stringify(body) },
     );
+    if (this.session?.user.id !== session.user.id)
+      throw new Error("Session changed. Please sign in again.");
+    return this.normalize(table, record);
+  }
+  private normalize<K extends Table>(
+    table: K,
+    record: RecordTypes[K],
+  ): RecordTypes[K] {
+    return table === "transactions"
+      ? {
+          ...record,
+          to_account_id: (record as Transaction).to_account_id || null,
+          category_id: (record as Transaction).category_id || null,
+        }
+      : record;
+  }
+  async updateTransactions(
+    values: Transaction[],
+    progress: (saved: number, records: Transaction[]) => void,
+    shouldContinue: () => boolean = () => true,
+  ): Promise<void> {
+    const session = this.session;
+    if (!session) throw new Error("Please sign in.");
+    for (let offset = 0; offset < values.length; offset += IMPORT_BATCH_SIZE) {
+      if (this.session?.user.id !== session.user.id || !shouldContinue())
+        throw new Error("Session changed. Reload the ledger before retrying.");
+      const chunk = values.slice(offset, offset + IMPORT_BATCH_SIZE);
+      const result = await this.request<
+        { status: number; body: Transaction }[]
+      >("/api/batch", {
+        method: "POST",
+        body: JSON.stringify({
+          requests: chunk.map((t) => ({
+            method: "PATCH",
+            url: `/api/collections/fuloos_transactions/records/${encodeURIComponent(t.id)}`,
+            body: {
+              type: t.type,
+              amount: t.amount,
+              account_id: t.account_id,
+              to_account_id: t.to_account_id || "",
+              category_id: t.category_id || "",
+              date: t.date,
+              payee: t.payee,
+              notes: t.notes,
+              user_id: session.user.id,
+            },
+          })),
+        }),
+      });
+      if (
+        !Array.isArray(result) ||
+        result.length !== chunk.length ||
+        result.some(
+          (r, i) =>
+            r.status < 200 || r.status >= 300 || r.body?.id !== chunk[i].id,
+        )
+      )
+        throw new Error(
+          "The server returned an unexpected batch result. Reload the ledger before retrying.",
+        );
+      if (this.session?.user.id !== session.user.id || !shouldContinue())
+        throw new Error("Session changed. Reload the ledger before retrying.");
+      progress(
+        offset + chunk.length,
+        result.map((r) => this.normalize("transactions", r.body)),
+      );
+    }
   }
   async createMany<K extends Table>(
     table: K,
@@ -333,3 +401,4 @@ export class PocketBaseBackend {
     );
   }
 }
+
