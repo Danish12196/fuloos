@@ -89,6 +89,7 @@ function App() {
     [accountFilter, setAccountFilter] = useState(""),
     [kindFilter, setKindFilter] = useState(""),
     [month, setMonth] = useState(today().slice(0, 7)),
+    [view, setView] = useState("month"),
     [hidden, setHidden] = useState(false);
   const generation = useRef(0);
   useEffect(() => {
@@ -268,7 +269,13 @@ function App() {
   if (checking) return <div className="loading">Opening Fuloos…</div>;
   if (!session && !demo)
     return <Auth onDemo={startDemo} externalError={error} />;
-  const monthly = ledger.transactions.filter((t) => t.date.startsWith(month)),
+  const end = new Date(`${month}-01T00:00:00Z`);
+  end.setUTCMonth(end.getUTCMonth() + 1);
+  const start = new Date(`${month}-01T00:00:00Z`);
+  if (view === "3" || view === "6" || view === "12") start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
+  if (view === "ytd") start.setUTCMonth(0);
+  const rangeLabel = view === "all" ? "All time" : `${start.toISOString().slice(0, 10)} – ${new Date(end.getTime() - 86400000).toISOString().slice(0, 10)}`;
+  const monthly = ledger.transactions.filter((t) => view === "all" || (t.date >= start.toISOString().slice(0, 10) && t.date < end.toISOString().slice(0, 10))),
     summary = totals(monthly),
     net = ledger.accounts.reduce(
       (s, a) => s + balance(a, ledger.transactions),
@@ -290,7 +297,7 @@ function App() {
           .toLowerCase()
           .includes(search.toLowerCase()),
     )
-    .sort((a, b) => b.date.localeCompare(a.date));
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   const spending = ledger.categories
     .map((c) => ({
       ...c,
@@ -338,6 +345,7 @@ function App() {
           {[
             { name: "Overview", icon: LayoutDashboard },
             { name: "Transactions", icon: ReceiptText },
+            { name: "Reports", icon: LayoutDashboard },
             { name: "Accounts", icon: Wallet },
             { name: "Categories", icon: Tags },
           ].map(({ name, icon: Icon }) => (
@@ -470,8 +478,11 @@ function App() {
               Loading your workspace…
             </div>
           )}
-          {(page === "Overview" || page === "Transactions") && (
+          {(page === "Overview" || page === "Transactions" || page === "Reports") && (
             <div className="period-row">
+              <select aria-label="Date range" value={view} onChange={(e) => { setView(e.target.value); setMonth(today().slice(0, 7)); }}>
+                <option value="month">Month</option><option value="3">3 months</option><option value="6">6 months</option><option value="ytd">Year to date</option><option value="12">1 year</option><option value="all">All time</option>
+              </select>
               <div className="month-control">
                 <button
                   className="icon-button"
@@ -495,7 +506,7 @@ function App() {
                 </button>
               </div>
               <span className="muted">
-                A fresh perspective on your finances
+                {rangeLabel}
               </span>
             </div>
           )}
@@ -530,7 +541,7 @@ function App() {
                   <h2>{concealed(summary.income)}</h2>
                   <small>
                     Money coming in{" "}
-                    <span className="green-text">This month</span>
+                    <span className="green-text">{rangeLabel}</span>
                   </small>
                 </article>
                 <article className="stat">
@@ -542,7 +553,7 @@ function App() {
                   </div>
                   <h2>{concealed(summary.expense)}</h2>
                   <small>
-                    Money going out <span>This month</span>
+                    Money going out <span>{rangeLabel}</span>
                   </small>
                 </article>
               </section>
@@ -603,7 +614,7 @@ function App() {
                 <section className="panel spending">
                   <div className="panel-heading">
                     <div>
-                      <h2>Where it went</h2>
+                      <button className="text-button" onClick={() => setPage("Reports")}><h2>Where it went</h2><ArrowRight size={16} /></button>
                       <p>Your spending by category</p>
                     </div>
                     <Tags size={18} className="muted" />
@@ -669,6 +680,14 @@ function App() {
                 </section>
               </div>
             </>
+          )}
+          {page === "Reports" && (
+            <section className="panel">
+              <div className="panel-heading"><h2>Where it went</h2><span>{rangeLabel}</span></div>
+              <div className="filters"><b>Income {concealed(summary.income)}</b><b>Expenses {concealed(summary.expense)}</b><b>Net cash flow {concealed(summary.income - summary.expense)}</b></div>
+              {spending.map(c => <div className="category-item" key={c.id}><span className="category-symbol" style={{color: c.color}}><Tags size={20}/></span><div><b>{c.name}</b><p>{(c.total / summary.expense * 100).toFixed(1)}% of spending</p><progress aria-label={`${c.name} share of spending`} value={c.total} max={summary.expense}/></div><strong>{concealed(c.total)}</strong></div>)}
+              {!spending.length && <Empty title="No spending in this period" text="Choose another date range to explore your spending."/>}
+            </section>
           )}
           {page === "Accounts" && (
             <>
@@ -903,6 +922,14 @@ function TransactionList({
   onDelete?: (t: Transaction) => void;
   busy?: boolean;
 }) {
+  const balances = new Map<string, Map<string, number>>();
+  const running = new Map(ledger.accounts.map(a => [a.id, a.opening_balance]));
+  // IDs provide a consistent order where only a transaction date is available.
+  for (const t of [...ledger.transactions].sort((a,b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
+    running.set(t.account_id, (running.get(t.account_id) ?? 0) + (t.type === "income" ? t.amount : -t.amount));
+    if (t.to_account_id) running.set(t.to_account_id, (running.get(t.to_account_id) ?? 0) + t.amount);
+    balances.set(t.id, new Map(running));
+  }
   return items.length ? (
     <div className="transaction-list">
       {items.map((t) => {
@@ -944,6 +971,8 @@ function TransactionList({
                 </small>
               </span>
               <span className="transaction-value">
+                <small>{account?.name}: {concealed(balances.get(t.id)?.get(t.account_id) ?? 0)} balance</small>
+                {t.to_account_id && <small>{ledger.accounts.find(a => a.id === t.to_account_id)?.name}: {concealed(balances.get(t.id)?.get(t.to_account_id) ?? 0)} balance</small>}
                 <b className={t.type === "income" ? "green-text" : ""}>
                   {t.type === "income" ? "+" : t.type === "expense" ? "−" : ""}
                   {concealed(t.amount)}
@@ -1587,3 +1616,4 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </React.StrictMode>,
 );
+
