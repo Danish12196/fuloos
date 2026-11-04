@@ -1994,11 +1994,19 @@ button {
   display: grid;
   gap: 8px;
 }
-.csv-check {
+.modal label.csv-check {
+  flex-direction: row;
+  justify-content: flex-start;
   display: flex;
   align-items: center;
   gap: 10px;
   margin: 12px 0;
+}
+.csv-check input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
 }
 .csv-check input,
 .csv-table input {
@@ -2090,4 +2098,11 @@ button {
 }
 .csv-table select {
   min-width: 160px;
+}
+
+.csv-category-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
 }
