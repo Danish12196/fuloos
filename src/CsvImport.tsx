@@ -23,6 +23,9 @@ export function CsvImport({
   ) => Promise<void>;
 }) {
   const [filter, setFilter] = useState("all");
+  const [manualCategories, setManualCategories] = useState(false);
+  const [creatingAll, setCreatingAll] = useState(false);
+  const [categoryProgress, setCategoryProgress] = useState("");
   const [creating, setCreating] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const [text, setText] = useState(""),
@@ -68,20 +71,65 @@ export function CsvImport({
     ) ?? [];
   const data = header ? rows.slice(1) : rows;
   const preview = previewCsv(data, options, ledger);
-  const missingCategories = [
-    ...new Set(
-      data
-        .filter((_, i) => !options.transfers?.[i])
-        .map((r) => (r[options.category] ?? "").trim())
-        .filter(
-          (name) =>
-            name &&
-            !ledger.categories.some(
-              (c) => c.name.toLowerCase() === name.toLowerCase(),
-            ),
-        ),
-    ),
-  ];
+  const missingByName = new Map<string, string>();
+  const existingNames = new Set(
+    ledger.categories.map((c) => c.name.toLowerCase()),
+  );
+  data.forEach((row, index) => {
+    const name = (row[options.category] ?? "").trim();
+    const key = name.toLowerCase();
+    if (
+      name &&
+      !options.transfers?.[index] &&
+      !existingNames.has(key) &&
+      !missingByName.has(key)
+    ) {
+      missingByName.set(key, name);
+    }
+  });
+  const missingCategories = [...missingByName.values()];
+  async function createAllCategories() {
+    if (busy) return;
+    const names = [...missingCategories];
+    if (names.some((name) => name.length > 80)) {
+      setError(
+        "Category names must be at most 80 characters. Correct the longer names in your CSV first.",
+      );
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setCreating(null);
+    setCreatingAll(true);
+    let saved = 0;
+    try {
+      for (const name of names) {
+        setCategoryProgress(
+          `Creating categories ${saved + 1} of ${names.length}…`,
+        );
+        await onCreateCategory({
+          name,
+          description: "",
+          emoji: "",
+          color: `#${Math.floor(Math.random() * 16777216)
+            .toString(16)
+            .padStart(6, "0")}`,
+        });
+        saved++;
+      }
+      setCategoryProgress(
+        `Created ${saved} categories. You can customize them later in Categories.`,
+      );
+    } catch (e) {
+      setCategoryProgress(`Created ${saved} of ${names.length} categories.`);
+      setError(
+        `${(e as Error).message} Category creation stopped. Saved categories are kept. If a request timed out, reload the ledger before retrying.`,
+      );
+    } finally {
+      setBusy(false);
+      setCreatingAll(false);
+    }
+  }
   const visible = preview.filter(
     (r) =>
       filter === "all" ||
@@ -146,6 +194,8 @@ export function CsvImport({
       const value = await file.text();
       setText(value);
       setFilename(file.name);
+      setCategoryProgress("");
+      setCreating(null);
       setOptions((o) => ({ ...o, transfers: {} }));
       setExcluded(new Set());
       setDone(false);
@@ -351,71 +401,93 @@ export function CsvImport({
           <section className="missing-categories">
             <h3>Missing categories</h3>
             <p className="muted">
-              Create the categories you want to keep. Rows remain invalid until
-              their category is created, or leave Category unmapped.
+              {missingCategories.length} missing categories. Create them all
+              with random colors and blank descriptions and emojis, or configure
+              each one yourself.
             </p>
-            {missingCategories.map((name) => (
-              <div key={name}>
-                <button
-                  className="secondary"
-                  disabled={busy || reading}
-                  onClick={() => setCreating(name)}
-                >
-                  Create {name}
-                </button>
-                {creating === name && (
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      const f = new FormData(e.currentTarget);
-                      setBusy(true);
-                      setError("");
-                      try {
-                        await onCreateCategory({
-                          name,
-                          description: String(f.get("description") ?? ""),
-                          color: String(f.get("color")),
-                          emoji: String(f.get("emoji") ?? ""),
-                        });
-                        setCreating(null);
-                      } catch (e) {
-                        setError((e as Error).message);
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
+            <div className="csv-category-actions">
+              <button
+                className="primary"
+                disabled={busy || reading}
+                onClick={() => void createAllCategories()}
+              >
+                Create all missing categories
+              </button>
+              <button
+                className="secondary"
+                disabled={busy || reading}
+                aria-expanded={manualCategories}
+                onClick={() => setManualCategories((value) => !value)}
+              >
+                {manualCategories
+                  ? "Hide individual configuration"
+                  : "Configure individually"}
+              </button>
+            </div>
+            {manualCategories &&
+              missingCategories.map((name) => (
+                <div key={name}>
+                  <button
+                    className="secondary"
+                    disabled={busy || reading}
+                    onClick={() => setCreating(name)}
                   >
-                    <fieldset disabled={busy}>
-                      <p>{name}</p>
-                      {name.length > 80 && (
-                        <p role="alert">
-                          Correct this category name in the CSV: maximum 80
-                          characters.
-                        </p>
-                      )}
-                      <label>
-                        Description (optional)
-                        <input name="description" maxLength={500} />
-                      </label>
-                      <EmojiField />
-                      <ColorPicker />
-                      <button className="primary" disabled={name.length > 80}>
-                        Confirm creation
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => setCreating(null)}
-                      >
-                        Cancel
-                      </button>
-                    </fieldset>
-                  </form>
-                )}
-              </div>
-            ))}
+                    Create {name}
+                  </button>
+                  {creating === name && (
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        const f = new FormData(e.currentTarget);
+                        setBusy(true);
+                        setError("");
+                        try {
+                          await onCreateCategory({
+                            name,
+                            description: String(f.get("description") ?? ""),
+                            color: String(f.get("color")),
+                            emoji: String(f.get("emoji") ?? ""),
+                          });
+                          setCreating(null);
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      <fieldset disabled={busy}>
+                        <p>{name}</p>
+                        {name.length > 80 && (
+                          <p role="alert">
+                            Correct this category name in the CSV: maximum 80
+                            characters.
+                          </p>
+                        )}
+                        <label>
+                          Description (optional)
+                          <input name="description" maxLength={500} />
+                        </label>
+                        <EmojiField />
+                        <ColorPicker />
+                        <button className="primary" disabled={name.length > 80}>
+                          Confirm creation
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setCreating(null)}
+                        >
+                          Cancel
+                        </button>
+                      </fieldset>
+                    </form>
+                  )}
+                </div>
+              ))}
           </section>
         )}
+        {categoryProgress && <p role="status">{categoryProgress}</p>}
         {(parseError || error) && (
           <p role="alert" className="notice">
             {parseError || error}
@@ -563,7 +635,7 @@ export function CsvImport({
             </div>
           </>
         )}
-        {busy && (
+        {busy && !creatingAll && !creating && (
           <p role="status">
             Imported {progress} of {total}…
           </p>
@@ -582,7 +654,11 @@ export function CsvImport({
             disabled={busy || reading || !!parseError || !selected.length}
             onClick={() => void submit()}
           >
-            {busy ? "Importing…" : `Import ${selected.length} transactions`}
+            {busy
+              ? creatingAll || creating
+                ? "Creating categories…"
+                : "Importing…"
+              : `Import ${selected.length} transactions`}
           </button>
         )}
       </div>
