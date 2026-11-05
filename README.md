@@ -1,6 +1,6 @@
 # Fuloos
 
-A UAE-focused personal finance tracker. Phase 1 is a responsive React + TypeScript web app with PocketBase email/password authentication, user-owned accounts and neutral categories, and manual income, expenses and transfers.
+A UAE-focused personal finance tracker. Phase 1 is a responsive React + TypeScript web app with PocketBase email/password authentication, user-owned accounts and neutral categories, manual income, expenses and transfers, and recurring schedule & subscription tracking.
 
 ## Local development
 
@@ -16,7 +16,11 @@ Without `VITE_POCKETBASE_URL`, an explicitly labeled in-memory demo is available
 
 ## Backend and deployment
 
-The web app builds to `dist/` for Vercel. Your persistent PocketBase instance at `https://pb.danishali.dev` provides authentication and data storage. See [PocketBase setup](pocketbase/README.md) for the namespaced migration and verification steps. The foundation migration is installed and password login has been verified. The CSV/appearance upgrade in `pocketbase/pb_migrations/1793795400_import_appearance.js` must also be applied on the existing server for zero amounts and emoji persistence.
+The web app builds to `dist/` for Vercel. Your persistent PocketBase instance at `https://pb.danishali.dev` provides authentication and data storage. See [PocketBase setup](pocketbase/README.md) for the namespaced migrations and verification steps:
+
+- `pocketbase/pb_migrations/1793709000_fuloos.js` — core users, accounts, categories and transactions collections.
+- `pocketbase/pb_migrations/1793795400_import_appearance.js` — zero-amount support and emoji persistence.
+- `pocketbase/pb_migrations/1793881800_recurring.js` — recurring schedules (`fuloos_recurring`) and confirmed occurrence links (`fuloos_recurring_occurrences`).
 
 Set `VITE_POCKETBASE_URL` as a build environment variable after backend setup. No superuser key or service credential belongs in browser code. User sessions are stored in localStorage, refreshed on app startup and removed on signout; restrict frontend script sources and avoid untrusted scripts. Signing out clears the current browser session; PocketBase tokens remain valid until expiry or server-side invalidation.
 
@@ -27,12 +31,22 @@ Set `VITE_POCKETBASE_URL` as a build environment variable after backend setup. N
 - Signed opening balances with an as-of date; balances are derived from transactions.
 - Neutral category CRUD with description and color; one category can be used for income or expenses.
 - Transaction CRUD; month navigation, text search, account and type filters.
-- Overview with total net balance, monthly income/expenses, category spending and recent activity.
+- Recurring schedules & subscriptions CRUD with pause/resume, fixed or variable AED amounts, daily/weekly/monthly/yearly frequencies, month-end and leap-year clamping, chronological and monthly calendar views, and manual payment confirmation (record new or link existing transaction).
+- Overview with total net balance, monthly income/expenses, category spending, recent activity, 30-day upcoming recurring forecast, and monthly recurring vs recorded actuals breakdown without double-counting linked payments.
 - A transfer is one atomic row affecting both accounts; edits/deletion affect both sides together. Credit card payments are transfers. Opening balances and transfers are excluded from income/expenses.
 - Integer fils throughout; no floating-point monetary arithmetic.
-- PocketBase API ownership rules plus SQLite integrity triggers for cross-user references, transfers, dates and deletion restrictions.
+- PocketBase API ownership rules plus SQLite integrity triggers for cross-user references, transfers, recurring occurrence uniqueness, dates and deletion restrictions.
 
-New users start with an empty workspace. Create accounts and categories before adding transactions. Deleting a used category requires reassignment first; deleting an account with transactions requires moving/removing them first. Editing an opening balance intentionally changes the derived current balance.
+New users start with an empty workspace. Create accounts and categories before adding transactions or recurring schedules. Deleting a used category requires reassignment first; deleting an account with transactions or recurring schedules requires moving/removing them first. Deleting a recurring schedule removes its schedule and confirmation links while preserving past recorded ledger transactions and balances. Editing an opening balance intentionally changes the derived current balance.
+
+## Recurring transactions & subscriptions
+
+Open **Recurring** from the workspace navigation to manage regular bills, subscriptions and recurring income:
+
+- **Schedules**: Supports `expense` and `income` schedules in integer fils (AED) with `daily`, `weekly`, `monthly` or `yearly` frequencies, start date, optional end date, account, optional category, notes, and `active` or `paused` status.
+- **Fixed vs variable amounts**: Fixed schedules prefill the expected AED amount on confirmation; variable schedules (such as DEWA utilities) require entering the actual amount paid or received when confirming.
+- **Calendar & timezone handling**: Today's boundary is evaluated in `Asia/Dubai` (`UTC+4`). Monthly and yearly schedules anchor to the `start_date` day-of-month and clamp cleanly to shorter months and non-leap years (`2026-01-31` → `2026-02-28` → `2026-03-31`, `2024-02-29` → `2025-02-28` → `2028-02-29`).
+- **Balances stay separate until paid**: Upcoming, overdue and paused schedules are forecasts only and never alter account balances or recorded income/expense totals. Marking an occurrence paid either creates a real ledger transaction or links an existing unlinked transaction of matching type, and prevents duplicate confirmation of the same occurrence or linking one transaction twice.
 
 ## Checks
 
@@ -41,11 +55,11 @@ npm test
 npm run build
 ```
 
-Tests cover exact money calculations, transfers, neutral-category usage, PocketBase HTTP adapter behavior and the migration's SQLite integrity triggers. The schema test runs the actual migration trigger SQL against embedded SQLite and inspects collection rule definitions; it does not substitute for live PocketBase API isolation tests. Live signup/signin and server migration verification remain pending server access.
+Tests cover exact money calculations, transfers, neutral-category usage, recurring schedule generation and confirmation rules, PocketBase HTTP adapter behavior and the migrations' SQLite integrity triggers. The schema test runs the actual migration trigger SQL against embedded SQLite and inspects collection rule definitions; it does not substitute for live PocketBase API isolation tests. Live signup/signin and server migration verification remain pending server access.
 
 ## Scope
 
-Android, SMS capture, PDF imports, ML, budgets and LLM features are deferred. The ledger is shared-client-ready; Phase 1 keeps one currency (AED) to prevent implicit FX conversions.
+Android, SMS capture, PDF imports, ML, automatic bank matching, automated payment execution, push notifications, budgets and LLM features are deferred. The ledger is shared-client-ready; Phase 1 keeps one currency (AED) to prevent implicit FX conversions.
 
 Design references: [Ivy Wallet](https://github.com/Ivy-Apps/ivy-wallet), [Actual accounts](https://actualbudget.org/docs/accounts/) and [Actual transfers](https://actualbudget.org/docs/transactions/transfers/). This is an original interface and implementation; no reference application's code or artwork is copied.
 

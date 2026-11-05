@@ -5,6 +5,16 @@ import { createRoot } from "react-dom/client";
 import { backend, type Session } from "./client";
 import { CsvImport } from "./CsvImport";
 import type { ImportTransaction } from "./csv";
+import {
+  ConfirmOccurrenceModal,
+  DashboardRecurring,
+  RecurringEditorModal,
+  RecurringPage,
+} from "./RecurringView";
+import {
+  validateOccurrenceConfirmation,
+  validateRecurringSchedule,
+} from "./recurring";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   ArrowDownLeft,
@@ -15,6 +25,7 @@ import {
   Wallet,
   Tags,
   ReceiptText,
+  Repeat,
   LogOut,
   X,
   Search,
@@ -27,12 +38,15 @@ import {
   Leaf,
   Trash2,
   Pencil,
+  Unlink,
 } from "lucide-react";
 import {
   balance,
   emptyLedger,
+  errorMessage,
   minor,
   money,
+  shiftMonth,
   today,
   totals,
   validateTransaction,
@@ -41,6 +55,8 @@ import {
   type Category,
   type Kind,
   type Ledger,
+  type RecurringOccurrenceRecord,
+  type RecurringSchedule,
   type Transaction,
 } from "./domain";
 import { demoLedger } from "./demo";
@@ -94,10 +110,23 @@ function App() {
     [hidden, setHidden] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
+  const [recurringModal, setRecurringModal] = useState<{
+    open: true;
+    item?: RecurringSchedule;
+  } | null>(null);
+  const [confirmOcc, setConfirmOcc] = useState<{
+    schedule: RecurringSchedule;
+    occurrenceDate: string;
+  } | null>(null);
+  const [recurringFilter, setRecurringFilter] = useState<
+    "all" | "active" | "overdue" | "paused"
+  >("all");
   const generation = useRef(0);
   useEffect(() => {
     setSelected(new Set());
     setBulkItems(null);
+    setRecurringModal(null);
+    setConfirmOcc(null);
   }, [session?.user.id, demo]);
   function toggleSelection(id: string) {
     setSelected((old) => {
@@ -148,7 +177,7 @@ function App() {
     backend
       .getSession()
       .then(setSession)
-      .catch((e) => setError(message(e)))
+      .catch((e) => setError(errorMessage(e)))
       .finally(() => setChecking(false));
     return backend.subscribe((s) => {
       setSession(s);
@@ -167,7 +196,7 @@ function App() {
       const data = await backend.load();
       if (current === generation.current) setLedger(data);
     } catch (e) {
-      if (current === generation.current) setError(message(e));
+      if (current === generation.current) setError(errorMessage(e));
     } finally {
       if (current === generation.current) setLoading(false);
     }
@@ -216,6 +245,240 @@ function App() {
         );
       }
       setModal(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function saveRecurring(
+    value: Omit<RecurringSchedule, "id">,
+    id?: string,
+  ) {
+    if (busy) throw new Error("Another operation is running.");
+    validateRecurringSchedule({ ...value, id }, ledger);
+    setBusy(true);
+    const current = generation.current;
+    try {
+      if (demo) {
+        const next: RecurringSchedule = { ...value, id: id ?? demoId() };
+        setLedger((l) => ({
+          ...l,
+          recurring: id
+            ? (l.recurring ?? []).map((r) => (r.id === id ? next : r))
+            : [...(l.recurring ?? []), next],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const record = await backend.save(
+          "recurring",
+          value as unknown as Record<string, unknown>,
+          id,
+        );
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring: id
+            ? (l.recurring ?? []).map((r) => (r.id === id ? record : r))
+            : [...(l.recurring ?? []), record],
+        }));
+      }
+      setRecurringModal(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function togglePauseRecurring(schedule: RecurringSchedule) {
+    if (busy) return;
+    const nextStatus = schedule.status === "paused" ? "active" : "paused";
+    const { id, ...rest } = schedule;
+    const nextValue: Omit<RecurringSchedule, "id"> = {
+      ...rest,
+      status: nextStatus,
+    };
+    setBusy(true);
+    setError("");
+    const current = generation.current;
+    try {
+      validateRecurringSchedule({ ...nextValue, id }, ledger);
+      if (demo) {
+        setLedger((l) => ({
+          ...l,
+          recurring: (l.recurring ?? []).map((r) =>
+            r.id === id ? { ...nextValue, id } : r,
+          ),
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const record = await backend.save(
+          "recurring",
+          nextValue as unknown as Record<string, unknown>,
+          id,
+        );
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring: (l.recurring ?? []).map((r) => (r.id === id ? record : r)),
+        }));
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function confirmCreateOccurrence(
+    schedule: RecurringSchedule,
+    occurrenceDate: string,
+    tx: Omit<Transaction, "id">,
+  ) {
+    if (busy) throw new Error("Another operation is running.");
+    validateTransaction(tx, ledger);
+    validateOccurrenceConfirmation(
+      {
+        recurring_id: schedule.id,
+        occurrence_date: occurrenceDate,
+        transaction_id: "__pending__",
+      },
+      {
+        ...ledger,
+        transactions: [...ledger.transactions, { ...tx, id: "__pending__" }],
+      },
+    );
+    setBusy(true);
+    const current = generation.current;
+    try {
+      if (demo) {
+        const txRecord: Transaction = { ...tx, id: demoId() };
+        const occRecord: RecurringOccurrenceRecord = {
+          id: demoId(),
+          recurring_id: schedule.id,
+          occurrence_date: occurrenceDate,
+          transaction_id: txRecord.id,
+        };
+        setLedger((l) => ({
+          ...l,
+          transactions: [...l.transactions, txRecord],
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            occRecord,
+          ],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const savedTx = await backend.save(
+          "transactions",
+          tx as unknown as Record<string, unknown>,
+        );
+        let savedOcc: RecurringOccurrenceRecord;
+        try {
+          savedOcc = await backend.save("recurring_occurrences", {
+            recurring_id: schedule.id,
+            occurrence_date: occurrenceDate,
+            transaction_id: savedTx.id,
+          });
+        } catch (occErr) {
+          let rolledBack = false;
+          try {
+            await backend.remove("transactions", savedTx.id);
+            rolledBack = true;
+          } catch {
+            rolledBack = false;
+          }
+          if (!rolledBack && current === generation.current) {
+            setLedger((l) => ({
+              ...l,
+              transactions: [...l.transactions, savedTx],
+            }));
+            throw new Error(
+              "Transaction was saved, but linking the occurrence failed. Select it under “Link existing” to avoid recording it twice.",
+            );
+          }
+          throw occErr;
+        }
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          transactions: [...l.transactions, savedTx],
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            savedOcc,
+          ],
+        }));
+      }
+      setConfirmOcc(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function confirmLinkOccurrence(
+    schedule: RecurringSchedule,
+    occurrenceDate: string,
+    transactionId: string,
+  ) {
+    if (busy) throw new Error("Another operation is running.");
+    const draft = {
+      recurring_id: schedule.id,
+      occurrence_date: occurrenceDate,
+      transaction_id: transactionId,
+    };
+    validateOccurrenceConfirmation(draft, ledger);
+    setBusy(true);
+    const current = generation.current;
+    try {
+      if (demo) {
+        const occRecord: RecurringOccurrenceRecord = {
+          ...draft,
+          id: demoId(),
+        };
+        setLedger((l) => ({
+          ...l,
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            occRecord,
+          ],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const savedOcc = await backend.save("recurring_occurrences", draft);
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            savedOcc,
+          ],
+        }));
+      }
+      setConfirmOcc(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function unlinkOccurrence(occurrenceId: string) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    const current = generation.current;
+    try {
+      if (demo) {
+        setLedger((l) => ({
+          ...l,
+          recurring_occurrences: (l.recurring_occurrences ?? []).filter(
+            (o) => o.id !== occurrenceId,
+          ),
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.remove("recurring_occurrences", occurrenceId);
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring_occurrences: (l.recurring_occurrences ?? []).filter(
+            (o) => o.id !== occurrenceId,
+          ),
+        }));
+      }
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -292,43 +555,72 @@ function App() {
     }
   }
   async function remove(
-    table: "accounts" | "categories" | "transactions",
+    table: "accounts" | "categories" | "transactions" | "recurring",
     id: string,
   ) {
-    if (!window.confirm("Delete this item? This cannot be undone.")) return;
+    const promptText =
+      table === "recurring"
+        ? "Delete this recurring schedule? Past recorded transactions will stay in your ledger."
+        : "Delete this item? This cannot be undone.";
+    if (!window.confirm(promptText)) return;
     setBusy(true);
     setError("");
     try {
-      if (
-        table === "accounts" &&
-        ledger.transactions.some(
-          (t) => t.account_id === id || t.to_account_id === id,
+      if (table === "accounts") {
+        if (
+          ledger.transactions.some(
+            (t) => t.account_id === id || t.to_account_id === id,
+          )
         )
-      )
-        throw new Error("Delete or move this account’s transactions first.");
-      if (
-        table === "categories" &&
-        ledger.transactions.some((t) => t.category_id === id)
-      )
-        throw new Error("Reassign this category’s transactions first.");
-      if (demo)
-        setLedger((l) => ({
+          throw new Error("Delete or move this account’s transactions first.");
+        if ((ledger.recurring ?? []).some((r) => r.account_id === id))
+          throw new Error(
+            "Delete or reassign this account’s recurring schedules first.",
+          );
+      }
+      if (table === "categories") {
+        if (ledger.transactions.some((t) => t.category_id === id))
+          throw new Error("Reassign this category’s transactions first.");
+        if ((ledger.recurring ?? []).some((r) => r.category_id === id))
+          throw new Error(
+            "Reassign this category’s recurring schedules first.",
+          );
+      }
+      const applyRemoval = (l: Ledger): Ledger => {
+        if (table === "recurring") {
+          return {
+            ...l,
+            recurring: (l.recurring ?? []).filter((r) => r.id !== id),
+            recurring_occurrences: (l.recurring_occurrences ?? []).filter(
+              (o) => o.recurring_id !== id,
+            ),
+          };
+        }
+        if (table === "transactions") {
+          return {
+            ...l,
+            transactions: l.transactions.filter((t) => t.id !== id),
+            recurring_occurrences: (l.recurring_occurrences ?? []).filter(
+              (o) => o.transaction_id !== id,
+            ),
+          };
+        }
+        return {
           ...l,
           [table]: l[table].filter((v) => v.id !== id),
-        }));
+        } as Ledger;
+      };
+      if (demo) setLedger(applyRemoval);
       else {
         if (!backend || !session) throw new Error("Please sign in.");
         const current = generation.current;
         await backend.remove(table, id);
         if (current !== generation.current) return;
-        setLedger((l) => ({
-          ...l,
-          [table]: l[table].filter((v) => v.id !== id),
-        }));
+        setLedger(applyRemoval);
         setSelected((old) => new Set([...old].filter((value) => value !== id)));
       }
     } catch (e) {
-      setError(message(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -394,11 +686,6 @@ function App() {
       color: "#929b96",
       total: uncategorized,
     });
-  function moveMonth(n: number) {
-    const d = new Date(`${month}-15T12:00:00Z`);
-    d.setUTCMonth(d.getUTCMonth() + n);
-    setMonth(d.toISOString().slice(0, 7));
-  }
   const concealed = (v: number) => (hidden ? "••••••" : money(v));
   return (
     <div className="shell">
@@ -421,6 +708,7 @@ function App() {
           {[
             { name: "Overview", icon: LayoutDashboard },
             { name: "Transactions", icon: ReceiptText },
+            { name: "Recurring", icon: Repeat },
             { name: "Reports", icon: LayoutDashboard },
             { name: "Accounts", icon: Wallet },
             { name: "Categories", icon: Tags },
@@ -433,6 +721,7 @@ function App() {
                 setSearch("");
                 setAccountFilter("");
                 setKindFilter("");
+                if (name === "Recurring") setRecurringFilter("all");
               }}
             >
               <Icon size={19} />
@@ -515,33 +804,41 @@ function App() {
               <p>
                 {page === "Overview"
                   ? "Your everyday finances, all in one calm place."
-                  : page === "Accounts"
-                    ? "Every account. One place to see where you stand."
-                    : page === "Categories"
-                      ? "Organize your money in a way that makes sense to you."
-                      : "The small details behind the bigger picture."}
+                  : page === "Recurring"
+                    ? "Subscriptions, bills and regular income — balances stay untouched until paid."
+                    : page === "Accounts"
+                      ? "Every account. One place to see where you stand."
+                      : page === "Categories"
+                        ? "Organize your money in a way that makes sense to you."
+                        : "The small details behind the bigger picture."}
               </p>
             </div>
             <button
               className="primary"
               disabled={loading || busy}
-              onClick={() =>
-                setModal({
-                  kind:
-                    page === "Accounts"
-                      ? "account"
-                      : page === "Categories"
-                        ? "category"
-                        : "transaction",
-                })
-              }
+              onClick={() => {
+                if (page === "Recurring") {
+                  setRecurringModal({ open: true });
+                } else {
+                  setModal({
+                    kind:
+                      page === "Accounts"
+                        ? "account"
+                        : page === "Categories"
+                          ? "category"
+                          : "transaction",
+                  });
+                }
+              }}
             >
               <Plus size={18} />
               {page === "Accounts"
                 ? "Add account"
                 : page === "Categories"
                   ? "Add category"
-                  : "Add transaction"}
+                  : page === "Recurring"
+                    ? "Add recurring"
+                    : "Add transaction"}
             </button>
           </div>
           {error && (
@@ -577,7 +874,7 @@ function App() {
                 <button
                   className="icon-button"
                   aria-label="Previous month"
-                  onClick={() => moveMonth(-1)}
+                  onClick={() => setMonth((m) => shiftMonth(m, -1))}
                 >
                   <ChevronLeft size={17} />
                 </button>
@@ -590,7 +887,7 @@ function App() {
                 <button
                   className="icon-button"
                   aria-label="Next month"
-                  onClick={() => moveMonth(1)}
+                  onClick={() => setMonth((m) => shiftMonth(m, 1))}
                 >
                   <ChevronRight size={17} />
                 </button>
@@ -773,7 +1070,38 @@ function App() {
                   />
                 </section>
               </div>
+              <DashboardRecurring
+                ledger={ledger}
+                month={month}
+                concealed={concealed}
+                busy={busy}
+                onOpenRecurring={(filter = "all") => {
+                  setRecurringFilter(filter);
+                  setPage("Recurring");
+                }}
+                onConfirm={(schedule, occurrenceDate) =>
+                  setConfirmOcc({ schedule, occurrenceDate })
+                }
+              />
             </>
+          )}
+          {page === "Recurring" && (
+            <RecurringPage
+              ledger={ledger}
+              concealed={concealed}
+              busy={busy}
+              initialFilter={recurringFilter}
+              onAddSchedule={() => setRecurringModal({ open: true })}
+              onEditSchedule={(item) => setRecurringModal({ open: true, item })}
+              onTogglePause={(item) => void togglePauseRecurring(item)}
+              onDeleteSchedule={(item) => void remove("recurring", item.id)}
+              onConfirmOccurrence={(schedule, occurrenceDate) =>
+                setConfirmOcc({ schedule, occurrenceDate })
+              }
+              onUnlinkOccurrence={(occurrenceId) =>
+                void unlinkOccurrence(occurrenceId)
+              }
+            />
           )}
           {page === "Reports" && (
             <section className="panel">
@@ -1062,6 +1390,34 @@ function App() {
           }}
         />
       )}
+      {recurringModal && (
+        <RecurringEditorModal
+          item={recurringModal.item}
+          ledger={ledger}
+          concealed={concealed}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setRecurringModal(null);
+          }}
+          onSave={saveRecurring}
+          onUnlinkOccurrence={(occurrenceId) =>
+            void unlinkOccurrence(occurrenceId)
+          }
+        />
+      )}
+      {confirmOcc && (
+        <ConfirmOccurrenceModal
+          schedule={confirmOcc.schedule}
+          occurrenceDate={confirmOcc.occurrenceDate}
+          ledger={ledger}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setConfirmOcc(null);
+          }}
+          onConfirmCreate={confirmCreateOccurrence}
+          onConfirmLink={confirmLinkOccurrence}
+        />
+      )}
       {modal && (
         <Editor
           modal={modal}
@@ -1071,17 +1427,13 @@ function App() {
             if (!busy) setModal(null);
           }}
           save={save}
+          onUnlinkOccurrence={(occurrenceId) =>
+            void unlinkOccurrence(occurrenceId)
+          }
         />
       )}
     </div>
   );
-}
-function message(e: unknown) {
-  return e instanceof Error
-    ? e.message
-    : typeof e === "object" && e && "message" in e
-      ? String(e.message)
-      : "Something went wrong. Please try again.";
 }
 function Empty({ title, text }: { title: string; text: string }) {
   return (
@@ -1279,7 +1631,7 @@ function Auth({
     setBusy(true);
     backend
       .signInWithGoogle()
-      .catch((e) => setError(message(e)))
+      .catch((e) => setError(errorMessage(e)))
       .finally(() => setBusy(false));
   }
   async function submit(e: React.FormEvent) {
@@ -1304,7 +1656,7 @@ function Auth({
         }
       } else await backend.signIn(email, password);
     } catch (e) {
-      setError(message(e));
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -1483,6 +1835,7 @@ function Editor({
   busy,
   onClose,
   save,
+  onUnlinkOccurrence,
 }: {
   modal: NonNullable<Modal>;
   ledger: Ledger;
@@ -1493,6 +1846,7 @@ function Editor({
     value: Record<string, unknown>,
     id?: string,
   ) => Promise<void>;
+  onUnlinkOccurrence: (occurrenceId: string) => void;
 }) {
   const item = modal.item;
   const [kind, setKind] = useState<Kind>(
@@ -1500,6 +1854,24 @@ function Editor({
     ),
     [error, setError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
+  const linkedOccurrence = useMemo(
+    () =>
+      modal.kind === "transaction" && modal.item
+        ? (ledger.recurring_occurrences ?? []).find(
+            (o) => o.transaction_id === modal.item!.id,
+          )
+        : undefined,
+    [modal, ledger.recurring_occurrences],
+  );
+  const linkedSchedule = useMemo(
+    () =>
+      linkedOccurrence
+        ? (ledger.recurring ?? []).find(
+            (r) => r.id === linkedOccurrence.recurring_id,
+          )
+        : undefined,
+    [linkedOccurrence, ledger.recurring],
+  );
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
@@ -1551,11 +1923,11 @@ function Editor({
           payee: s("payee"),
           notes: s("notes"),
         };
-        validateTransaction(value, ledger);
+        validateTransaction({ ...value, id: item?.id }, ledger);
         await save("transactions", value, item?.id);
       }
     } catch (e) {
-      setError(message(e));
+      setError(errorMessage(e));
     }
   }
   return (
@@ -1595,10 +1967,28 @@ function Editor({
                 Create an account first to start adding transactions.
               </div>
             )}
+            {linkedOccurrence && (
+              <div className="notice linked-banner">
+                <span>
+                  Linked to{" "}
+                  <b>{linkedSchedule?.name ?? "recurring schedule"}</b> (
+                  {linkedOccurrence.occurrence_date})
+                </span>
+                <button
+                  type="button"
+                  className="secondary compact-btn"
+                  disabled={busy}
+                  onClick={() => onUnlinkOccurrence(linkedOccurrence.id)}
+                >
+                  <Unlink size={13} /> Unlink
+                </button>
+              </div>
+            )}
             <div className="type-switch">
               {(["expense", "income", "transfer"] as const).map((k) => (
                 <button
                   type="button"
+                  disabled={Boolean(linkedSchedule && k !== linkedSchedule.type)}
                   className={kind === k ? "selected" : ""}
                   key={k}
                   onClick={() => setKind(k)}
@@ -1851,4 +2241,3 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </React.StrictMode>,
 );
-

@@ -2223,3 +2223,425 @@ button {
 .csv-presets > p[role="status"]:not(.notice) {
   margin-top: 10px;
 }
+
+/* Recurring transactions, calendar view, and confirmation modal */
+.modal {
+  background: var(--surface);
+}
+.recurring-overview {
+  margin-top: 22px;
+  grid-template-columns: 1fr 1.15fr;
+}
+.recurring-breakdown {
+  padding: 0 23px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.recurring-metric-box {
+  padding: 15px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--soft-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.recurring-metric-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 14px;
+}
+.recurring-metric-head strong {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.4px;
+}
+.recurring-metric-sub {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.recurring-metric-foot {
+  font-size: 12px;
+  color: var(--text-soft);
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.recurring-safe-note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.recurring-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.transaction-main.as-static {
+  cursor: default;
+}
+.transaction-main.as-static:hover .transaction-description b {
+  color: inherit;
+}
+.recurring-panel-head {
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.status-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--soft-surface);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.status-tabs button {
+  border: 0;
+  background: none;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-tabs button.active {
+  background: var(--surface);
+  color: var(--brand);
+  font-weight: 650;
+  box-shadow: 0 1px 3px #1c382112;
+}
+.tab-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--active-surface);
+  color: var(--text-soft);
+}
+.recurring-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  white-space: normal !important;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.status-pill.overdue {
+  background: #f9ebe8;
+  color: #9c4337;
+  border-color: #efcfc8;
+}
+.status-pill.due_today {
+  background: #fbf3e4;
+  color: #8c6223;
+  border-color: #eedab6;
+}
+.status-pill.upcoming {
+  background: var(--soft-surface);
+  color: var(--link);
+  border-color: var(--line);
+}
+.status-pill.paid {
+  background: #eaf3ea;
+  color: #2d6a45;
+  border-color: #cbe1cd;
+}
+.status-pill.paused,
+.status-pill.completed {
+  background: #f1f3f0;
+  color: var(--muted);
+  border-color: var(--line);
+}
+.mini-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 550;
+  background: var(--soft-surface);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.mini-tag.variable {
+  color: #7c5c2b;
+  background: #fbf5ea;
+  border-color: #ecdcb9;
+}
+.recurring-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+.compact-btn {
+  padding: 8px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  margin-left: 10px;
+}
+.recurring-actions .compact-btn {
+  margin-left: 0;
+}
+.compact-btn:hover:not(:disabled) {
+  background: var(--hover-surface);
+  border-color: #c5d4be;
+}
+.empty-cta {
+  margin-top: 16px;
+}
+.recurring-calendar-wrap {
+  padding: 0 23px 23px;
+  overflow-x: auto;
+}
+.calendar-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+.calendar-weekday {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  padding: 4px 6px;
+}
+.calendar-cell {
+  min-height: 94px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.calendar-cell.today {
+  border-color: var(--green);
+  background: var(--soft-surface);
+}
+.calendar-cell.empty-cell {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.45;
+}
+.calendar-day {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.calendar-cell.today .calendar-day {
+  color: var(--brand);
+}
+.calendar-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.calendar-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 11px;
+  background: var(--soft-surface);
+  text-align: left;
+  min-width: 0;
+}
+.calendar-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-chip b {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.calendar-chip.income {
+  border-left: 3px solid #4d865b;
+}
+.calendar-chip.expense {
+  border-left: 3px solid #bf8d70;
+}
+.calendar-chip.overdue {
+  background: #f9ebe8;
+  color: #9c4337;
+  border-color: #e8beb5;
+}
+.calendar-chip.paid {
+  opacity: 0.78;
+  cursor: pointer;
+}
+.calendar-chip.paid:hover:not(:disabled) {
+  border-color: #b7d3bc;
+}
+.link-existing-box {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.candidate-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.modal label.candidate-item {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 400;
+  cursor: pointer;
+}
+.modal label.candidate-item:last-child {
+  border-bottom: 0;
+}
+.modal label.candidate-item:hover {
+  background: var(--hover-surface);
+}
+.candidate-item input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  accent-color: var(--green);
+  padding: 0;
+}
+.candidate-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.candidate-meta b {
+  font-size: 14px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.candidate-meta small {
+  font-size: 12px;
+  color: var(--muted);
+}
+[data-theme="dark"] .status-pill.overdue,
+[data-theme="dark"] .calendar-chip.overdue {
+  background: #432824;
+  color: #f2b4a8;
+  border-color: #663b35;
+}
+[data-theme="dark"] .status-pill.due_today,
+[data-theme="dark"] .mini-tag.variable {
+  background: #3d321f;
+  color: #ebd09e;
+  border-color: #5c4a2b;
+}
+[data-theme="dark"] .status-pill.paid {
+  background: #233f2b;
+  color: #b3dab8;
+  border-color: #355d40;
+}
+[data-theme="dark"] .status-pill.paused,
+[data-theme="dark"] .status-pill.completed {
+  background: #243129;
+  color: var(--muted);
+}
+[data-theme="dark"] .compact-btn:hover:not(:disabled) {
+  border-color: #506448;
+}
+@media (max-width: 1100px) {
+  .recurring-overview {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 650px) {
+  .nav-item {
+    font-size: 10px;
+    padding: 7px 4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .recurring-breakdown,
+  .recurring-calendar-wrap {
+    padding: 0 15px 18px;
+  }
+  .recurring-row,
+  .recurring-occ-row {
+    flex-wrap: wrap;
+    padding-bottom: 10px;
+  }
+  .recurring-actions {
+    width: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+  .recurring-occ-row > .compact-btn {
+    margin-left: auto;
+  }
+  .calendar-grid {
+    min-width: 560px;
+  }
+}
+.linked-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.linked-banner .compact-btn {
+  margin-left: 0;
+}
+.candidate-item.as-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.candidate-item.as-row:last-child {
+  border-bottom: 0;
+}

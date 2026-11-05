@@ -1,23 +1,33 @@
 # Fuloos on PocketBase
 
-The frontend runs on Vercel. PocketBase runs on your existing persistent server at `https://pb.danishali.dev`; Vercel does not host PocketBase's persistent SQLite process. The public health endpoint returned HTTP 200 and `API is healthy.` on 3 November 2026. No administrator access or installed PocketBase version was available, so the migration has **not** been applied to that instance.
+The frontend runs on Vercel. PocketBase runs on your existing persistent server at `https://pb.danishali.dev`; Vercel does not host PocketBase's persistent SQLite process. The public health endpoint returned HTTP 200 and `API is healthy.` on 3 November 2026. No administrator access or installed PocketBase version was available, so pending migrations must be applied by the server operator during deployment.
 
-## Installation
+## Installation & Upgrades
 
-1. Back up the running instance's `pb_data` and existing migration folder. Check its version using `./pocketbase --version`. This migration uses the v0.23+ fields/collection API; review compatibility with the installed version before applying it.
-2. Copy `pb_migrations/1793709000_fuloos.js` into the instance's `pb_migrations` directory, preserving existing files. It creates only `fuloos_users`, `fuloos_accounts`, `fuloos_categories` and `fuloos_transactions`; it intentionally refuses collection-name collisions rather than editing an existing application.
+1. Back up the running instance's `pb_data` and existing migration folder. Check its version using `./pocketbase --version`. These migrations use the v0.23+ fields/collection API; review compatibility with the installed version before applying them.
+2. Copy the migration files from `pocketbase/pb_migrations/` into the instance's `pb_migrations` directory, preserving existing files:
+   - `1793709000_fuloos.js` — creates `fuloos_users`, `fuloos_accounts`, `fuloos_categories` and `fuloos_transactions` (refuses collection-name collisions).
+   - `1793795400_import_appearance.js` — enables zero-fils amounts and account/category emoji fields.
+   - `1793881800_recurring.js` — creates `fuloos_recurring` and `fuloos_recurring_occurrences` with per-user ownership rules, unique indexes, and relational integrity triggers.
 3. Run `./pocketbase migrate up` using the instance's existing data and migrations paths, then restart PocketBase. Alternatively, the standard server applies pending migrations on startup. Use the existing container/service's normal deployment process, rather than starting a second instance over the same database.
 4. Keep HTTPS enabled. If the server restricts allowed origins, allow the exact Vercel production origin and localhost development origin. Do not put administrator tokens into Vercel frontend variables.
 5. Set `VITE_POCKETBASE_URL=https://pb.danishali.dev` as a **build** environment variable, then rebuild/redeploy the frontend. Without it, Fuloos remains an explicitly labeled in-memory demo.
-6. Verify signup/signin, then create two test users and confirm that neither user can read or reference the other's accounts/categories/transactions. Test opening-date changes, category deletion restrictions, and credit-card repayments before real financial data.
+6. Verify signup/signin, then create two test users and confirm that neither user can read or reference the other's accounts, categories, transactions, recurring schedules, or occurrence confirmations. Test opening-date changes, category/account deletion restrictions, recurring schedule confirmation/linking, and credit-card repayments before real financial data.
 
 The migration allows ordinary email/password signup and immediate signin. Email verification is not required initially; if you later require verification, configure SMTP and update the auth UI/collection auth rule together. Password reset and verification-email UI are future additions.
 
 ## Data guarantees
 
-API rules scope every ledger record to its owner and prevent reassigning ownership. SQLite triggers validate relation ownership, integer fils, transfer structure, valid dates, and opening-date consistency in the same write. Transfers are one atomic record; they do not need a two-request balance update. Account balances are derived, not independently mutated. Categories have no income/expense type and may be reused for either.
+API rules scope every ledger and recurring record to its owner and prevent reassigning ownership. SQLite triggers validate relation ownership, integer fils, transfer structure, valid ISO calendar dates, and opening-date consistency in the same write. Transfers are one atomic record; they do not need a two-request balance update. Account balances are derived, not independently mutated. Categories have no income/expense type and may be reused for either.
 
-The migration includes a down migration that **deletes Fuloos collections and their records**. Do not run `migrate down` on real data as a routine fix. Restore a verified backup for a production rollback.
+### Recurring collections (`1793881800_recurring.js`)
+
+- **`fuloos_recurring`**: Stores recurring `expense` and `income` schedules (`name`, integer fils `amount` in `0..100,000,000,000`, `amount_type` in `fixed | variable`, `account_id`, optional `category_id`, `frequency` in `daily | weekly | monthly | yearly`, `start_date`, optional `end_date >= start_date`, `status` in `active | paused`, and `notes`).
+- **`fuloos_recurring_occurrences`**: Links a confirmed `(recurring_id, occurrence_date)` pair to a real `fuloos_transactions` row (`transaction_id`).
+- **Uniqueness & type safety**: Enforces `UNIQUE(recurring_id, occurrence_date)` (an occurrence cannot be confirmed twice) and `UNIQUE(transaction_id)` (a ledger transaction cannot be linked to multiple occurrences). SQLite triggers enforce same-user ownership across `account_id`, `category_id`, `recurring_id` and `transaction_id`, require `transaction.type == recurring.type` (blocking transfers and mismatched types), and prevent changing the `type` of a schedule or transaction while linked.
+- **Safe deletion**: Deleting an account or category referenced by `fuloos_recurring` is blocked until reassigned or removed. Deleting a `fuloos_recurring` schedule automatically removes its `fuloos_recurring_occurrences` links while leaving historical `fuloos_transactions` and account balances intact. Deleting a linked `fuloos_transactions` row automatically removes its occurrence confirmation link.
+
+Each migration includes a down migration that **deletes its Fuloos collections and their records**. Do not run `migrate down` on real data as a routine fix. Restore a verified backup for a production rollback.
 
 Keep regular off-device backups and update PocketBase through its supported version upgrade path. A self-hosted PocketBase instance does not depend on Supabase inactivity policies, but availability still depends on your server, persistent volume, backups and monitoring.
 
