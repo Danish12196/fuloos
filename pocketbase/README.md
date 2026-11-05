@@ -9,10 +9,11 @@ The frontend runs on Vercel. PocketBase runs on your existing persistent server 
    - `1793709000_fuloos.js` — creates `fuloos_users`, `fuloos_accounts`, `fuloos_categories` and `fuloos_transactions` (refuses collection-name collisions).
    - `1793795400_import_appearance.js` — enables zero-fils amounts and account/category emoji fields.
    - `1793881800_recurring.js` — creates `fuloos_recurring` and `fuloos_recurring_occurrences` with per-user ownership rules, unique indexes, and relational integrity triggers.
+   - `1793968200_recurring_automation.js` — adds `quarterly` frequency, `match_source` and `match_reason` on occurrences, and creates `fuloos_recurring_prefs` collection with per-user ownership rules and triggers.
 3. Run `./pocketbase migrate up` using the instance's existing data and migrations paths, then restart PocketBase. Alternatively, the standard server applies pending migrations on startup. Use the existing container/service's normal deployment process, rather than starting a second instance over the same database.
 4. Keep HTTPS enabled. If the server restricts allowed origins, allow the exact Vercel production origin and localhost development origin. Do not put administrator tokens into Vercel frontend variables.
 5. Set `VITE_POCKETBASE_URL=https://pb.danishali.dev` as a **build** environment variable, then rebuild/redeploy the frontend. Without it, Fuloos remains an explicitly labeled in-memory demo.
-6. Verify signup/signin, then create two test users and confirm that neither user can read or reference the other's accounts, categories, transactions, recurring schedules, or occurrence confirmations. Test opening-date changes, category/account deletion restrictions, recurring schedule confirmation/linking, and credit-card repayments before real financial data.
+6. Verify signup/signin, then create two test users and confirm that neither user can read or reference the other's accounts, categories, transactions, recurring schedules, occurrence confirmations, or automation preferences. Test opening-date changes, category/account deletion restrictions, recurring schedule confirmation/linking, and credit-card repayments before real financial data.
 
 The migration allows ordinary email/password signup and immediate signin. Email verification is not required initially; if you later require verification, configure SMTP and update the auth UI/collection auth rule together. Password reset and verification-email UI are future additions.
 
@@ -26,6 +27,13 @@ API rules scope every ledger and recurring record to its owner and prevent reass
 - **`fuloos_recurring_occurrences`**: Links a confirmed `(recurring_id, occurrence_date)` pair to a real `fuloos_transactions` row (`transaction_id`).
 - **Uniqueness & type safety**: Enforces `UNIQUE(recurring_id, occurrence_date)` (an occurrence cannot be confirmed twice) and `UNIQUE(transaction_id)` (a ledger transaction cannot be linked to multiple occurrences). SQLite triggers enforce same-user ownership across `account_id`, `category_id`, `recurring_id` and `transaction_id`, require `transaction.type == recurring.type` (blocking transfers and mismatched types), and prevent changing the `type` of a schedule or transaction while linked.
 - **Safe deletion**: Deleting an account or category referenced by `fuloos_recurring` is blocked until reassigned or removed. Deleting a `fuloos_recurring` schedule automatically removes its `fuloos_recurring_occurrences` links while leaving historical `fuloos_transactions` and account balances intact. Deleting a linked `fuloos_transactions` row automatically removes its occurrence confirmation link.
+
+### Recurring Automation collections & schema updates (`1793968200_recurring_automation.js`)
+
+- **`fuloos_recurring.frequency`**: Extends frequency options to include `quarterly` (`daily | weekly | monthly | quarterly | yearly`).
+- **`fuloos_recurring_occurrences`**: Adds optional `match_source` (`auto | manual`) and `match_reason` fields to track provenance and explain automatic transaction linkages.
+- **`fuloos_recurring_prefs`**: Stores user automation preferences (`user_id`, `auto_detect` in `on | off`, `auto_match` in `auto | review | off`, and `dismissed_keys` JSON array).
+- **Triggers & Data Integrity**: Preserves cross-tenant isolation and per-user uniqueness (`UNIQUE(user_id)`). Validates that user preferences cannot reference another user's account or ledger records.
 
 Each migration includes a down migration that **deletes its Fuloos collections and their records**. Do not run `migrate down` on real data as a routine fix. Restore a verified backup for a production rollback.
 
