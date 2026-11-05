@@ -5,6 +5,10 @@ export type AccountType =
   | "cash"
   | "other";
 export type Kind = "expense" | "income" | "transfer";
+export type RecurringKind = "expense" | "income";
+export type RecurringFrequency = "daily" | "weekly" | "monthly" | "yearly";
+export type RecurringAmountType = "fixed" | "variable";
+export type RecurringStatus = "active" | "paused";
 export interface Account {
   id: string;
   name: string;
@@ -32,15 +36,39 @@ export interface Transaction {
   payee: string;
   notes: string;
 }
+export interface RecurringSchedule {
+  id: string;
+  name: string;
+  type: RecurringKind;
+  amount: number;
+  amount_type: RecurringAmountType;
+  account_id: string;
+  category_id: string | null;
+  frequency: RecurringFrequency;
+  start_date: string;
+  end_date: string | null;
+  status: RecurringStatus;
+  notes: string;
+}
+export interface RecurringOccurrenceRecord {
+  id: string;
+  recurring_id: string;
+  occurrence_date: string;
+  transaction_id: string;
+}
 export interface Ledger {
   accounts: Account[];
   categories: Category[];
   transactions: Transaction[];
+  recurring?: RecurringSchedule[];
+  recurring_occurrences?: RecurringOccurrenceRecord[];
 }
 export const emptyLedger: Ledger = {
   accounts: [],
   categories: [],
   transactions: [],
+  recurring: [],
+  recurring_occurrences: [],
 };
 export function minor(value: string): number {
   if (!/^-?\d+(\.\d{1,2})?$/.test(value.trim()))
@@ -69,8 +97,15 @@ export function balance(account: Account, transactions: Transaction[]): number {
     account.opening_balance,
   );
 }
+export function isIsoCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const ms = Date.parse(value + "T00:00:00Z");
+  return (
+    !Number.isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === value
+  );
+}
 export function validateTransaction(
-  t: Omit<Transaction, "id">,
+  t: Omit<Transaction, "id"> & { id?: string },
   ledger: Ledger,
 ): void {
   if (
@@ -83,8 +118,7 @@ export function validateTransaction(
     );
   const source = ledger.accounts.find((a) => a.id === t.account_id);
   if (!source) throw new Error("Select an account.");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(t.date) || Number.isNaN(Date.parse(t.date)))
-    throw new Error("Choose a valid date.");
+  if (!isIsoCalendarDate(t.date)) throw new Error("Choose a valid date.");
   if (t.date < source.opening_date)
     throw new Error("Transaction cannot be before the account opening date.");
   if (t.type === "transfer") {
@@ -102,6 +136,20 @@ export function validateTransaction(
     if (t.category_id && !ledger.categories.some((c) => c.id === t.category_id))
       throw new Error("Choose an existing category.");
   }
+  if (t.id && ledger.recurring_occurrences?.length) {
+    const link = ledger.recurring_occurrences.find(
+      (o) => o.transaction_id === t.id,
+    );
+    if (link) {
+      const schedule = ledger.recurring?.find(
+        (r) => r.id === link.recurring_id,
+      );
+      if (schedule && schedule.type !== t.type)
+        throw new Error(
+          "Unlink recurring occurrence before changing transaction type.",
+        );
+    }
+  }
 }
 export function totals(transactions: Transaction[]) {
   return transactions.reduce(
@@ -112,10 +160,23 @@ export function totals(transactions: Transaction[]) {
     { income: 0, expense: 0 },
   );
 }
-export const today = () =>
+export function errorMessage(e: unknown): string {
+  return e instanceof Error
+    ? e.message
+    : typeof e === "object" && e && "message" in e
+      ? String(e.message)
+      : "Something went wrong. Please try again.";
+}
+export function shiftMonth(month: string, delta: number): string {
+  const d = new Date(`${month}-15T12:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  return d.toISOString().slice(0, 7);
+}
+export const uaeToday = (at: Date = new Date()) =>
   new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Dubai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
+  }).format(at);
+export const today = () => uaeToday();

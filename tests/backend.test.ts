@@ -369,3 +369,296 @@ test("batch imports stop when the session changes and warn on uncertain network 
   );
 });
 
+test("PocketBase load fetches all 5 collections, normalizes relations and empty strings to null", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json({
+      items: [
+        {
+          id: "acc1",
+          name: "Everyday",
+          type: "current",
+          opening_balance: 100000,
+          opening_date: "2026-01-01",
+          color: "#1d5b48",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({
+      items: [
+        {
+          id: "cat1",
+          name: "Bills",
+          description: "Utilities",
+          color: "#9e8aba",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({
+      items: [
+        {
+          id: "tx1",
+          type: "expense",
+          amount: 5000,
+          account_id: "acc1",
+          to_account_id: "",
+          category_id: "",
+          date: "2026-01-05",
+          payee: "Grocery",
+          notes: "",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({
+      items: [
+        {
+          id: "rec1",
+          name: "Fibre Internet",
+          type: "expense",
+          amount: 37900,
+          amount_type: "fixed",
+          account_id: "acc1",
+          category_id: "",
+          frequency: "monthly",
+          start_date: "2026-01-01",
+          end_date: "",
+          status: "active",
+          notes: "Broadband",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({
+      items: [
+        {
+          id: "occ1",
+          recurring_id: "rec1",
+          occurrence_date: "2026-01-01",
+          transaction_id: "tx1",
+        },
+      ],
+      totalPages: 1,
+    }),
+  );
+
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const ledger = await f.backend.load();
+
+  assert.equal(ledger.accounts.length, 1);
+  assert.equal(ledger.categories.length, 1);
+  assert.equal(ledger.transactions.length, 1);
+  assert.equal(ledger.recurring?.length, 1);
+  assert.equal(ledger.recurring_occurrences?.length, 1);
+
+  // Transactions normalization: "" -> null
+  assert.equal(ledger.transactions[0].to_account_id, null);
+  assert.equal(ledger.transactions[0].category_id, null);
+
+  // Recurring schedules normalization: "" -> null for category_id and end_date
+  const rec = ledger.recurring![0];
+  assert.equal(rec.id, "rec1");
+  assert.equal(rec.category_id, null);
+  assert.equal(rec.end_date, null);
+
+  // Occurrences preserved
+  assert.equal(ledger.recurring_occurrences![0].id, "occ1");
+  assert.equal(ledger.recurring_occurrences![0].recurring_id, "rec1");
+  assert.equal(ledger.recurring_occurrences![0].transaction_id, "tx1");
+
+  // Verify that all 5 collections were requested
+  const paths = f.calls.slice(1).map((c) => c.url);
+  assert.ok(paths.some((p) => p.includes("/fuloos_accounts/records")));
+  assert.ok(paths.some((p) => p.includes("/fuloos_categories/records")));
+  assert.ok(paths.some((p) => p.includes("/fuloos_transactions/records")));
+  assert.ok(paths.some((p) => p.includes("/fuloos_recurring/records")));
+  assert.ok(paths.some((p) => p.includes("/fuloos_recurring_occurrences/records")));
+});
+
+test("PocketBase recurring saves normalize null category_id and end_date on write and restore nulls on read", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    // Response for recurring insert (POST)
+    json({
+      id: "rec-new",
+      name: "Internet",
+      type: "expense",
+      amount: 35000,
+      amount_type: "fixed",
+      account_id: "acc1",
+      category_id: "",
+      frequency: "monthly",
+      start_date: "2026-02-01",
+      end_date: "",
+      status: "active",
+      notes: "",
+    }),
+    // Response for recurring update (PATCH)
+    json({
+      id: "rec-new",
+      name: "Internet Upgraded",
+      type: "expense",
+      amount: 40000,
+      amount_type: "fixed",
+      account_id: "acc1",
+      category_id: "cat1",
+      frequency: "monthly",
+      start_date: "2026-02-01",
+      end_date: "2026-12-31",
+      status: "active",
+      notes: "Faster",
+    }),
+  );
+
+  await f.backend.signIn("test@example.test", "test-only-password");
+
+  // Create new recurring schedule with nulls
+  const created = await f.backend.save("recurring", {
+    name: "Internet",
+    type: "expense",
+    amount: 35000,
+    amount_type: "fixed",
+    account_id: "acc1",
+    category_id: null,
+    frequency: "monthly",
+    start_date: "2026-02-01",
+    end_date: null,
+    status: "active",
+    notes: "",
+  });
+
+  // Verify POST payload normalized null -> ""
+  const createCall = f.calls[1];
+  assert.equal(createCall.init.method, "POST");
+  assert.equal(
+    createCall.url,
+    "https://pb.example.test/api/collections/fuloos_recurring/records",
+  );
+  const createBody = JSON.parse(String(createCall.init.body));
+  assert.equal(createBody.user_id, "user-a");
+  assert.equal(createBody.category_id, "");
+  assert.equal(createBody.end_date, "");
+
+  // Verify returned object normalized "" -> null
+  assert.equal(created.id, "rec-new");
+  assert.equal(created.category_id, null);
+  assert.equal(created.end_date, null);
+
+  // Update existing recurring schedule with explicit category and end_date
+  const updated = await f.backend.save(
+    "recurring",
+    {
+      name: "Internet Upgraded",
+      type: "expense",
+      amount: 40000,
+      amount_type: "fixed",
+      account_id: "acc1",
+      category_id: "cat1",
+      frequency: "monthly",
+      start_date: "2026-02-01",
+      end_date: "2026-12-31",
+      status: "active",
+      notes: "Faster",
+    },
+    "rec-new",
+  );
+
+  // Verify PATCH url and body
+  const updateCall = f.calls[2];
+  assert.equal(updateCall.init.method, "PATCH");
+  assert.equal(
+    updateCall.url,
+    "https://pb.example.test/api/collections/fuloos_recurring/records/rec-new",
+  );
+  assert.equal(updated.category_id, "cat1");
+  assert.equal(updated.end_date, "2026-12-31");
+});
+
+test("PocketBase recurring_occurrences saves link and remove deletes records on both recurring collections", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    // save occurrence
+    json({
+      id: "ro-123",
+      recurring_id: "rec-1",
+      occurrence_date: "2026-03-01",
+      transaction_id: "tx-1",
+    }),
+    // remove recurring (204)
+    new Response(null, { status: 204 }),
+    // remove occurrence (204)
+    new Response(null, { status: 204 }),
+  );
+
+  await f.backend.signIn("test@example.test", "test-only-password");
+
+  const occ = await f.backend.save("recurring_occurrences", {
+    recurring_id: "rec-1",
+    occurrence_date: "2026-03-01",
+    transaction_id: "tx-1",
+  });
+
+  const occCall = f.calls[1];
+  assert.equal(occCall.init.method, "POST");
+  assert.equal(
+    occCall.url,
+    "https://pb.example.test/api/collections/fuloos_recurring_occurrences/records",
+  );
+  const occBody = JSON.parse(String(occCall.init.body));
+  assert.equal(occBody.user_id, "user-a");
+  assert.equal(occBody.recurring_id, "rec-1");
+  assert.equal(occ.id, "ro-123");
+
+  // Remove recurring schedule
+  await f.backend.remove("recurring", "rec-1");
+  const delRecCall = f.calls[2];
+  assert.equal(delRecCall.init.method, "DELETE");
+  assert.equal(
+    delRecCall.url,
+    "https://pb.example.test/api/collections/fuloos_recurring/records/rec-1",
+  );
+
+  // Remove occurrence link
+  await f.backend.remove("recurring_occurrences", "ro-123");
+  const delOccCall = f.calls[3];
+  assert.equal(delOccCall.init.method, "DELETE");
+  assert.equal(
+    delOccCall.url,
+    "https://pb.example.test/api/collections/fuloos_recurring_occurrences/records/ro-123",
+  );
+});
+
+test("PocketBase load degrades recurring collections to empty arrays on 404 pre-migration while keeping core collections strict", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json({ items: [], totalPages: 1 }), // accounts
+    json({ items: [], totalPages: 1 }), // categories
+    json({ items: [], totalPages: 1 }), // transactions
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring not migrated yet
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_occurrences not migrated yet
+  );
+
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const ledger = await f.backend.load();
+  assert.deepEqual(ledger.accounts, []);
+  assert.deepEqual(ledger.categories, []);
+  assert.deepEqual(ledger.transactions, []);
+  assert.deepEqual(ledger.recurring, []);
+  assert.deepEqual(ledger.recurring_occurrences, []);
+
+  // Core collection 404 still rejects loudly
+  f.queue.push(
+    json({ message: "Missing collection context.", data: {} }, 404),
+    json({ items: [], totalPages: 1 }),
+    json({ items: [], totalPages: 1 }),
+    json({ items: [], totalPages: 1 }),
+    json({ items: [], totalPages: 1 }),
+  );
+  await assert.rejects(() => f.backend.load(), /Install the PocketBase migration/);
+});

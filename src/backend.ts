@@ -1,14 +1,28 @@
 import PocketBase, { BaseAuthStore } from "pocketbase";
-import type { Account, Category, Ledger, Transaction } from "./domain";
+import type {
+  Account,
+  Category,
+  Ledger,
+  RecurringOccurrenceRecord,
+  RecurringSchedule,
+  Transaction,
+} from "./domain";
 export interface Session {
   token: string;
   user: { id: string; email: string };
 }
-export type Table = "accounts" | "categories" | "transactions";
+export type Table =
+  | "accounts"
+  | "categories"
+  | "transactions"
+  | "recurring"
+  | "recurring_occurrences";
 type RecordTypes = {
   accounts: Account;
   categories: Category;
   transactions: Transaction;
+  recurring: RecurringSchedule;
+  recurring_occurrences: RecurringOccurrenceRecord;
 };
 export const IMPORT_BATCH_SIZE = 100;
 type AuthResponse = { token: string; record: { id: string; email: string } };
@@ -242,21 +256,34 @@ export class PocketBaseBackend {
     }
     return items;
   }
+  private async optionalRows<T>(table: Table): Promise<T[]> {
+    try {
+      return await this.rows<T>(table);
+    } catch (e) {
+      if (
+        e instanceof Error &&
+        e.message.includes("Install the PocketBase migration")
+      )
+        return [];
+      throw e;
+    }
+  }
   async load(): Promise<Ledger> {
     if (!this.session) throw new Error("Please sign in.");
-    const [accounts, categories, records] = await Promise.all([
-      this.rows<Account>("accounts"),
-      this.rows<Category>("categories"),
-      this.rows<Transaction>("transactions"),
-    ]);
+    const [accounts, categories, records, recurring, recurringOccurrences] =
+      await Promise.all([
+        this.rows<Account>("accounts"),
+        this.rows<Category>("categories"),
+        this.rows<Transaction>("transactions"),
+        this.optionalRows<RecurringSchedule>("recurring"),
+        this.optionalRows<RecurringOccurrenceRecord>("recurring_occurrences"),
+      ]);
     return {
       accounts,
       categories,
-      transactions: records.map((t) => ({
-        ...t,
-        to_account_id: t.to_account_id || null,
-        category_id: t.category_id || null,
-      })),
+      transactions: records.map((t) => this.normalize("transactions", t)),
+      recurring: recurring.map((r) => this.normalize("recurring", r)),
+      recurring_occurrences: recurringOccurrences,
     };
   }
   async save<K extends Table>(
@@ -270,7 +297,7 @@ export class PocketBaseBackend {
       ...value,
       user_id: this.session.user.id,
     };
-    for (const key of ["to_account_id", "category_id"])
+    for (const key of ["to_account_id", "category_id", "end_date"])
       if (body[key as keyof typeof body] === null)
         Object.assign(body, { [key]: "" });
     const record = await this.request<RecordTypes[K]>(
@@ -285,13 +312,23 @@ export class PocketBaseBackend {
     table: K,
     record: RecordTypes[K],
   ): RecordTypes[K] {
-    return table === "transactions"
-      ? {
-          ...record,
-          to_account_id: (record as Transaction).to_account_id || null,
-          category_id: (record as Transaction).category_id || null,
-        }
-      : record;
+    if (table === "transactions") {
+      const tx = record as Transaction;
+      return {
+        ...tx,
+        to_account_id: tx.to_account_id || null,
+        category_id: tx.category_id || null,
+      } as RecordTypes[K];
+    }
+    if (table === "recurring") {
+      const r = record as RecurringSchedule;
+      return {
+        ...r,
+        category_id: r.category_id || null,
+        end_date: r.end_date || null,
+      } as RecordTypes[K];
+    }
+    return record;
   }
   async updateTransactions(
     values: Transaction[],
@@ -367,7 +404,7 @@ export class PocketBaseBackend {
               ...value,
               user_id: session.user.id,
             };
-            for (const key of ["to_account_id", "category_id"])
+            for (const key of ["to_account_id", "category_id", "end_date"])
               if (body[key] === null) body[key] = "";
             return {
               method: "POST",
@@ -389,7 +426,7 @@ export class PocketBaseBackend {
         throw new Error("Session changed. Reload the ledger before retrying.");
       progress(
         offset + chunk.length,
-        result.map((r) => r.body),
+        result.map((r) => this.normalize(table, r.body)),
       );
     }
   }
@@ -401,4 +438,3 @@ export class PocketBaseBackend {
     );
   }
 }
-
