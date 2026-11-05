@@ -10,7 +10,14 @@ import {
   DashboardRecurring,
   RecurringEditorModal,
   RecurringPage,
+  type RecurringTab,
 } from "./RecurringView";
+import {
+  buildMatchDismissKey,
+  reconcileTransactions,
+  type DetectedPattern,
+  type MatchCandidate,
+} from "./recurringAutomation";
 import {
   validateOccurrenceConfirmation,
   validateRecurringSchedule,
@@ -55,9 +62,12 @@ import {
   type Category,
   type Kind,
   type Ledger,
+  type OccurrenceMatchSource,
+  type RecurringPreferences,
   type RecurringOccurrenceRecord,
   type RecurringSchedule,
   type Transaction,
+  defaultRecurringPreferences,
 } from "./domain";
 import { demoLedger } from "./demo";
 import "./style.css";
@@ -113,11 +123,15 @@ function App() {
   const [recurringModal, setRecurringModal] = useState<{
     open: true;
     item?: RecurringSchedule;
+    initialDraft?: Partial<Omit<RecurringSchedule, "id">>;
+    historicalLinks?: { occurrence_date: string; transaction_id: string }[];
   } | null>(null);
   const [confirmOcc, setConfirmOcc] = useState<{
     schedule: RecurringSchedule;
     occurrenceDate: string;
+    existingConfirmation?: RecurringOccurrenceRecord;
   } | null>(null);
+  const [recurringTab, setRecurringTab] = useState<RecurringTab>("schedules");
   const [recurringFilter, setRecurringFilter] = useState<
     "all" | "active" | "overdue" | "paused"
   >("all");
@@ -127,6 +141,8 @@ function App() {
     setBulkItems(null);
     setRecurringModal(null);
     setConfirmOcc(null);
+    setRecurringTab("schedules");
+    setRecurringFilter("all");
   }, [session?.user.id, demo]);
   function toggleSelection(id: string) {
     setSelected((old) => {
@@ -258,13 +274,30 @@ function App() {
     setBusy(true);
     const current = generation.current;
     try {
+      let savedId = id;
       if (demo) {
-        const next: RecurringSchedule = { ...value, id: id ?? demoId() };
+        savedId = id ?? demoId();
+        const next: RecurringSchedule = { ...value, id: savedId };
+        const newOccs: RecurringOccurrenceRecord[] =
+          !id && recurringModal?.historicalLinks?.length
+            ? recurringModal.historicalLinks.map((link) => ({
+                id: demoId(),
+                recurring_id: savedId!,
+                occurrence_date: link.occurrence_date,
+                transaction_id: link.transaction_id,
+                match_source: "auto",
+                match_reason: "Linked from detected recurring pattern",
+              }))
+            : [];
         setLedger((l) => ({
           ...l,
           recurring: id
             ? (l.recurring ?? []).map((r) => (r.id === id ? next : r))
             : [...(l.recurring ?? []), next],
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            ...newOccs,
+          ],
         }));
       } else {
         if (!backend || !session) throw new Error("Please sign in.");
@@ -273,15 +306,228 @@ function App() {
           value as unknown as Record<string, unknown>,
           id,
         );
+        savedId = record.id;
+        const savedOccs: RecurringOccurrenceRecord[] = [];
+        if (!id && recurringModal?.historicalLinks?.length) {
+          for (const link of recurringModal.historicalLinks) {
+            try {
+              const savedOcc = await backend.save("recurring_occurrences", {
+                recurring_id: savedId,
+                occurrence_date: link.occurrence_date,
+                transaction_id: link.transaction_id,
+                match_source: "auto",
+                match_reason: "Linked from detected recurring pattern",
+              });
+              savedOccs.push(savedOcc);
+            } catch (e) {
+              console.error("Failed to link historical occurrence", e);
+            }
+          }
+        }
         if (current !== generation.current) return;
         setLedger((l) => ({
           ...l,
           recurring: id
             ? (l.recurring ?? []).map((r) => (r.id === id ? record : r))
             : [...(l.recurring ?? []), record],
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            ...savedOccs,
+          ],
         }));
       }
       setRecurringModal(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePreferences(prefs: Partial<RecurringPreferences>) {
+    if (busy) return;
+    const currentPrefs = ledger.recurring_prefs ?? defaultRecurringPreferences;
+    const nextPrefs: RecurringPreferences = {
+      ...currentPrefs,
+      ...prefs,
+    };
+    setBusy(true);
+    setError("");
+    const current = generation.current;
+    try {
+      if (demo) {
+        setLedger((l) => ({
+          ...l,
+          recurring_prefs: nextPrefs,
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const saved = await backend.save(
+          "recurring_prefs",
+          nextPrefs as unknown as Record<string, unknown>,
+          currentPrefs.id,
+        );
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring_prefs: saved,
+        }));
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acceptDetectedPattern(pattern: DetectedPattern) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    const current = generation.current;
+    try {
+      validateRecurringSchedule(pattern.draftSchedule, ledger);
+      let scheduleId = "";
+      if (demo) {
+        scheduleId = demoId();
+        const nextSchedule: RecurringSchedule = {
+          ...pattern.draftSchedule,
+          id: scheduleId,
+        };
+        const newOccurrences: RecurringOccurrenceRecord[] =
+          pattern.historicalLinks.map((link) => ({
+            id: demoId(),
+            recurring_id: scheduleId,
+            occurrence_date: link.occurrence_date,
+            transaction_id: link.transaction_id,
+            match_source: "auto",
+            match_reason: "Linked from detected recurring pattern",
+          }));
+        setLedger((l) => ({
+          ...l,
+          recurring: [...(l.recurring ?? []), nextSchedule],
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            ...newOccurrences,
+          ],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const record = await backend.save(
+          "recurring",
+          pattern.draftSchedule as unknown as Record<string, unknown>,
+        );
+        scheduleId = record.id;
+        const savedOccs: RecurringOccurrenceRecord[] = [];
+        for (const link of pattern.historicalLinks) {
+          try {
+            const savedOcc = await backend.save("recurring_occurrences", {
+              recurring_id: scheduleId,
+              occurrence_date: link.occurrence_date,
+              transaction_id: link.transaction_id,
+              match_source: "auto",
+              match_reason: "Linked from detected recurring pattern",
+            });
+            savedOccs.push(savedOcc);
+          } catch (e) {
+            console.error("Failed to link historical occurrence", e);
+          }
+        }
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring: [...(l.recurring ?? []), record],
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            ...savedOccs,
+          ],
+        }));
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function editDetectedPattern(pattern: DetectedPattern) {
+    setRecurringModal({
+      open: true,
+      initialDraft: pattern.draftSchedule,
+      historicalLinks: pattern.historicalLinks,
+    });
+  }
+
+  async function dismissPattern(patternKey: string) {
+    const existing = ledger.recurring_prefs?.dismissed_keys ?? [];
+    if (existing.includes(patternKey)) return;
+    await savePreferences({ dismissed_keys: [...existing, patternKey] });
+  }
+
+  async function dismissMatchCandidate(matchKey: string) {
+    const existing = ledger.recurring_prefs?.dismissed_keys ?? [];
+    if (existing.includes(matchKey)) return;
+    await savePreferences({ dismissed_keys: [...existing, matchKey] });
+  }
+
+  async function restoreDismissed() {
+    await savePreferences({ dismissed_keys: [] });
+  }
+
+  async function runAutoReconciliation() {
+    if (busy) return;
+    const currentPrefs = ledger.recurring_prefs ?? defaultRecurringPreferences;
+    if (currentPrefs.auto_match === "off") return;
+    const recon = reconcileTransactions(ledger, { asOfDate: today() });
+    if (!recon.autoLinks.length) return;
+    setBusy(true);
+    setError("");
+    const current = generation.current;
+    try {
+      if (demo) {
+        const newOccs: RecurringOccurrenceRecord[] = recon.autoLinks.map(
+          (al) => ({
+            id: demoId(),
+            recurring_id: al.schedule.id,
+            occurrence_date: al.occurrenceDate,
+            transaction_id: al.transaction.id,
+            match_source: "auto",
+            match_reason: al.summaryReason,
+          }),
+        );
+        setLedger((l) => ({
+          ...l,
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            ...newOccs,
+          ],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const savedOccs: RecurringOccurrenceRecord[] = [];
+        for (const al of recon.autoLinks) {
+          try {
+            const saved = await backend.save("recurring_occurrences", {
+              recurring_id: al.schedule.id,
+              occurrence_date: al.occurrenceDate,
+              transaction_id: al.transaction.id,
+              match_source: "auto",
+              match_reason: al.summaryReason,
+            });
+            savedOccs.push(saved);
+          } catch (e) {
+            console.error("Auto-link save failed", e);
+          }
+        }
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          recurring_occurrences: [
+            ...(l.recurring_occurrences ?? []),
+            ...savedOccs,
+          ],
+        }));
+      }
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -413,39 +659,68 @@ function App() {
     schedule: RecurringSchedule,
     occurrenceDate: string,
     transactionId: string,
+    existingConfirmationId?: string,
+    matchSource: OccurrenceMatchSource = "manual",
+    matchReason: string = "Manual link",
   ) {
     if (busy) throw new Error("Another operation is running.");
-    const draft = {
+    const draft: Omit<RecurringOccurrenceRecord, "id"> = {
       recurring_id: schedule.id,
       occurrence_date: occurrenceDate,
       transaction_id: transactionId,
+      match_source: matchSource,
+      match_reason: matchReason,
     };
-    validateOccurrenceConfirmation(draft, ledger);
+    validateOccurrenceConfirmation(
+      draft,
+      existingConfirmationId
+        ? {
+            ...ledger,
+            recurring_occurrences: (ledger.recurring_occurrences ?? []).filter(
+              (o) => o.id !== existingConfirmationId,
+            ),
+          }
+        : ledger,
+    );
     setBusy(true);
     const current = generation.current;
     try {
       if (demo) {
-        const occRecord: RecurringOccurrenceRecord = {
-          ...draft,
-          id: demoId(),
-        };
-        setLedger((l) => ({
-          ...l,
-          recurring_occurrences: [
-            ...(l.recurring_occurrences ?? []),
-            occRecord,
-          ],
-        }));
+        if (existingConfirmationId) {
+          setLedger((l) => ({
+            ...l,
+            recurring_occurrences: (l.recurring_occurrences ?? []).map((o) =>
+              o.id === existingConfirmationId ? { ...o, ...draft } : o,
+            ),
+          }));
+        } else {
+          const occRecord: RecurringOccurrenceRecord = {
+            ...draft,
+            id: demoId(),
+          };
+          setLedger((l) => ({
+            ...l,
+            recurring_occurrences: [
+              ...(l.recurring_occurrences ?? []),
+              occRecord,
+            ],
+          }));
+        }
       } else {
         if (!backend || !session) throw new Error("Please sign in.");
-        const savedOcc = await backend.save("recurring_occurrences", draft);
+        const savedOcc = await backend.save(
+          "recurring_occurrences",
+          draft as unknown as Record<string, unknown>,
+          existingConfirmationId,
+        );
         if (current !== generation.current) return;
         setLedger((l) => ({
           ...l,
-          recurring_occurrences: [
-            ...(l.recurring_occurrences ?? []),
-            savedOcc,
-          ],
+          recurring_occurrences: existingConfirmationId
+            ? (l.recurring_occurrences ?? []).map((o) =>
+                o.id === existingConfirmationId ? savedOcc : o,
+              )
+            : [...(l.recurring_occurrences ?? []), savedOcc],
         }));
       }
       setConfirmOcc(null);
@@ -455,6 +730,22 @@ function App() {
   }
   async function unlinkOccurrence(occurrenceId: string) {
     if (busy) return;
+    const occ = (ledger.recurring_occurrences ?? []).find(
+      (o) => o.id === occurrenceId,
+    );
+    const dismissKey = occ
+      ? buildMatchDismissKey(
+          occ.recurring_id,
+          occ.occurrence_date,
+          occ.transaction_id,
+        )
+      : null;
+    const currentPrefs = ledger.recurring_prefs ?? defaultRecurringPreferences;
+    const nextDismissed =
+      dismissKey && !currentPrefs.dismissed_keys.includes(dismissKey)
+        ? [...currentPrefs.dismissed_keys, dismissKey]
+        : null;
+
     setBusy(true);
     setError("");
     const current = generation.current;
@@ -465,16 +756,32 @@ function App() {
           recurring_occurrences: (l.recurring_occurrences ?? []).filter(
             (o) => o.id !== occurrenceId,
           ),
+          recurring_prefs: nextDismissed
+            ? { ...currentPrefs, dismissed_keys: nextDismissed }
+            : l.recurring_prefs,
         }));
       } else {
         if (!backend || !session) throw new Error("Please sign in.");
         await backend.remove("recurring_occurrences", occurrenceId);
+        let updatedPrefs = ledger.recurring_prefs;
+        if (nextDismissed) {
+          try {
+            updatedPrefs = await backend.save(
+              "recurring_prefs",
+              { ...currentPrefs, dismissed_keys: nextDismissed },
+              currentPrefs.id,
+            );
+          } catch (e) {
+            console.error("Failed to persist unlinked dismissal key", e);
+          }
+        }
         if (current !== generation.current) return;
         setLedger((l) => ({
           ...l,
           recurring_occurrences: (l.recurring_occurrences ?? []).filter(
             (o) => o.id !== occurrenceId,
           ),
+          recurring_prefs: updatedPrefs ?? l.recurring_prefs,
         }));
       }
     } catch (e) {
@@ -721,7 +1028,7 @@ function App() {
                 setSearch("");
                 setAccountFilter("");
                 setKindFilter("");
-                if (name === "Recurring") setRecurringFilter("all");
+                if (name === "Recurring") { setRecurringFilter("all"); setRecurringTab("schedules"); }
               }}
             >
               <Icon size={19} />
@@ -1075,7 +1382,8 @@ function App() {
                 month={month}
                 concealed={concealed}
                 busy={busy}
-                onOpenRecurring={(filter = "all") => {
+                onOpenRecurring={(tab = "schedules", filter = "all") => {
+                  setRecurringTab(tab);
                   setRecurringFilter(filter);
                   setPage("Recurring");
                 }}
@@ -1090,6 +1398,7 @@ function App() {
               ledger={ledger}
               concealed={concealed}
               busy={busy}
+              initialTab={recurringTab}
               initialFilter={recurringFilter}
               onAddSchedule={() => setRecurringModal({ open: true })}
               onEditSchedule={(item) => setRecurringModal({ open: true, item })}
@@ -1101,6 +1410,32 @@ function App() {
               onUnlinkOccurrence={(occurrenceId) =>
                 void unlinkOccurrence(occurrenceId)
               }
+              onRelinkOccurrence={(existing, schedule, occurrenceDate) =>
+                setConfirmOcc({
+                  schedule,
+                  occurrenceDate,
+                  existingConfirmation: existing,
+                })
+              }
+              onAcceptPattern={(pattern) => void acceptDetectedPattern(pattern)}
+              onEditPattern={(pattern) => editDetectedPattern(pattern)}
+              onDismissPattern={(patternKey) => void dismissPattern(patternKey)}
+              onConfirmMatchCandidate={(candidate) =>
+                void confirmLinkOccurrence(
+                  candidate.schedule,
+                  candidate.occurrenceDate,
+                  candidate.transaction.id,
+                  undefined,
+                  "manual",
+                  candidate.summaryReason,
+                )
+              }
+              onDismissMatchCandidate={(matchKey) =>
+                void dismissMatchCandidate(matchKey)
+              }
+              onUpdatePreferences={(prefs) => void savePreferences(prefs)}
+              onRestoreDismissed={() => void restoreDismissed()}
+              onRunReconciliation={() => void runAutoReconciliation()}
             />
           )}
           {page === "Reports" && (
@@ -1393,6 +1728,7 @@ function App() {
       {recurringModal && (
         <RecurringEditorModal
           item={recurringModal.item}
+          initialDraft={recurringModal.initialDraft}
           ledger={ledger}
           concealed={concealed}
           busy={busy}
@@ -1409,6 +1745,7 @@ function App() {
         <ConfirmOccurrenceModal
           schedule={confirmOcc.schedule}
           occurrenceDate={confirmOcc.occurrenceDate}
+          existingConfirmation={confirmOcc.existingConfirmation}
           ledger={ledger}
           busy={busy}
           onClose={() => {

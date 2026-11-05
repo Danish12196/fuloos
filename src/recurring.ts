@@ -3,6 +3,7 @@ import {
   totals,
   validateTransaction,
   type Ledger,
+  type OccurrenceMatchSource,
   type RecurringFrequency,
   type RecurringOccurrenceRecord,
   type RecurringSchedule,
@@ -11,6 +12,13 @@ import {
 
 export const MIN_RECURRING_DATE = "1970-01-01";
 export const MAX_RECURRING_DATE = "2100-12-31";
+export const RECURRING_FREQUENCIES: readonly RecurringFrequency[] = [
+  "daily",
+  "weekly",
+  "monthly",
+  "quarterly",
+  "yearly",
+];
 
 export type SchedulePaymentStatus =
   | "overdue"
@@ -137,8 +145,10 @@ export function occurrenceAtStep(
     throw new Error("Occurrence step must be a nonnegative integer.");
   if (frequency === "daily") return addDays(startDate, step);
   if (frequency === "weekly") return addDays(startDate, step * 7);
-  if (frequency === "monthly") {
-    const totalMonths = start.year * 12 + (start.month - 1) + step;
+  if (frequency === "monthly" || frequency === "quarterly") {
+    const monthsPerStep = frequency === "quarterly" ? 3 : 1;
+    const totalMonths =
+      start.year * 12 + (start.month - 1) + step * monthsPerStep;
     const targetYear = Math.floor(totalMonths / 12);
     const targetMonth = (((totalMonths % 12) + 12) % 12) + 1;
     const targetDay = Math.min(
@@ -155,7 +165,7 @@ export function occurrenceAtStep(
   return formatIsoDate(targetYear, start.month, targetDay);
 }
 
-function firstStepOnOrAfter(
+export function firstStepOnOrAfter(
   startDate: string,
   frequency: RecurringFrequency,
   targetDate: string,
@@ -167,10 +177,13 @@ function firstStepOnOrAfter(
   if (frequency === "daily") return daysBetween(startDate, targetDate);
   if (frequency === "weekly")
     return Math.ceil(daysBetween(startDate, targetDate) / 7);
+  const monthsDiff = (t.year - s.year) * 12 + (t.month - s.month);
   let k =
     frequency === "monthly"
-      ? Math.max(0, (t.year - s.year) * 12 + (t.month - s.month))
-      : Math.max(0, t.year - s.year);
+      ? Math.max(0, monthsDiff)
+      : frequency === "quarterly"
+        ? Math.max(0, Math.floor(monthsDiff / 3))
+        : Math.max(0, t.year - s.year);
   while (k > 0 && occurrenceAtStep(startDate, frequency, k - 1) >= targetDate)
     k--;
   while (occurrenceAtStep(startDate, frequency, k) < targetDate) k++;
@@ -249,7 +262,7 @@ export function validateRecurringSchedule(
     );
   if (s.amount_type !== "fixed" && s.amount_type !== "variable")
     throw new Error("Choose fixed or variable amount.");
-  if (!["daily", "weekly", "monthly", "yearly"].includes(s.frequency))
+  if (!RECURRING_FREQUENCIES.includes(s.frequency))
     throw new Error("Choose a valid frequency.");
   if (s.status !== "active" && s.status !== "paused")
     throw new Error("Choose active or paused status.");
@@ -297,9 +310,12 @@ export function validateRecurringSchedule(
 
 export function validateOccurrenceConfirmation(
   input: {
+    id?: string;
     recurring_id: string;
     occurrence_date: string;
     transaction_id?: string;
+    match_source?: OccurrenceMatchSource;
+    match_reason?: string;
   },
   ledger: Ledger,
 ): void {
@@ -311,10 +327,19 @@ export function validateOccurrenceConfirmation(
     throw new Error(
       "Occurrence date does not match this recurring schedule.",
     );
+  if (
+    input.match_source !== undefined &&
+    input.match_source !== "manual" &&
+    input.match_source !== "auto"
+  )
+    throw new Error("Invalid occurrence match source.");
+  if (input.match_reason !== undefined && input.match_reason.length > 300)
+    throw new Error("Match reason must be 300 characters or fewer.");
   const occurrences = ledger.recurring_occurrences ?? [];
   if (
     occurrences.some(
       (o) =>
+        o.id !== input.id &&
         o.recurring_id === input.recurring_id &&
         o.occurrence_date === input.occurrence_date,
     )
@@ -327,7 +352,11 @@ export function validateOccurrenceConfirmation(
       throw new Error(
         "Linked transaction type must match the recurring schedule type.",
       );
-    if (occurrences.some((o) => o.transaction_id === input.transaction_id))
+    if (
+      occurrences.some(
+        (o) => o.id !== input.id && o.transaction_id === input.transaction_id,
+      )
+    )
       throw new Error(
         "That transaction is already linked to a recurring occurrence.",
       );
@@ -401,6 +430,7 @@ const UPCOMING_LEAD_DAYS: Record<RecurringFrequency, number> = {
   daily: 1,
   weekly: 2,
   monthly: 7,
+  quarterly: 14,
   yearly: 30,
 };
 

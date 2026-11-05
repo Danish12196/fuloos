@@ -1,12 +1,14 @@
 import PocketBase, { BaseAuthStore } from "pocketbase";
-import type {
-  Account,
-  Category,
-  Ledger,
-  RecurringOccurrenceRecord,
-  RecurringSchedule,
-  Transaction,
-} from "./domain";
+import {
+  defaultRecurringPreferences,
+  type Account,
+  type Category,
+  type Ledger,
+  type RecurringOccurrenceRecord,
+  type RecurringPreferences,
+  type RecurringSchedule,
+  type Transaction,
+} from "./domain.ts";
 export interface Session {
   token: string;
   user: { id: string; email: string };
@@ -16,13 +18,16 @@ export type Table =
   | "categories"
   | "transactions"
   | "recurring"
-  | "recurring_occurrences";
+  | "recurring_occurrences"
+  | "recurring_prefs";
+type SavedRecurringPreferences = RecurringPreferences & { id: string };
 type RecordTypes = {
   accounts: Account;
   categories: Category;
   transactions: Transaction;
   recurring: RecurringSchedule;
   recurring_occurrences: RecurringOccurrenceRecord;
+  recurring_prefs: SavedRecurringPreferences;
 };
 export const IMPORT_BATCH_SIZE = 100;
 type AuthResponse = { token: string; record: { id: string; email: string } };
@@ -32,6 +37,41 @@ interface StorageLike {
   removeItem(key: string): void;
 }
 const storageKey = "fuloos.auth.v1";
+const MAX_DISMISSED_KEYS = 400;
+
+function parseDismissedKeys(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return [
+      ...new Set(raw.filter((v): v is string => typeof v === "string" && !!v)),
+    ].slice(-MAX_DISMISSED_KEYS);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return [
+          ...new Set(
+            parsed.filter((v): v is string => typeof v === "string" && !!v),
+          ),
+        ].slice(-MAX_DISMISSED_KEYS);
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function serializeDismissedKeys(raw: unknown): string {
+  const list = parseDismissedKeys(raw);
+  let encoded = JSON.stringify(list);
+  while (encoded.length > 19500 && list.length > 0) {
+    list.shift();
+    encoded = JSON.stringify(list);
+  }
+  return encoded;
+}
+
 export class PocketBaseBackend {
   private session: Session | null = null;
   private listeners = new Set<(session: Session | null) => void>();
@@ -270,21 +310,56 @@ export class PocketBaseBackend {
   }
   async load(): Promise<Ledger> {
     if (!this.session) throw new Error("Please sign in.");
-    const [accounts, categories, records, recurring, recurringOccurrences] =
-      await Promise.all([
-        this.rows<Account>("accounts"),
-        this.rows<Category>("categories"),
-        this.rows<Transaction>("transactions"),
-        this.optionalRows<RecurringSchedule>("recurring"),
-        this.optionalRows<RecurringOccurrenceRecord>("recurring_occurrences"),
-      ]);
+    const [
+      accounts,
+      categories,
+      records,
+      recurring,
+      recurringOccurrences,
+      recurringPrefs,
+    ] = await Promise.all([
+      this.rows<Account>("accounts"),
+      this.rows<Category>("categories"),
+      this.rows<Transaction>("transactions"),
+      this.optionalRows<RecurringSchedule>("recurring"),
+      this.optionalRows<RecurringOccurrenceRecord>("recurring_occurrences"),
+      this.optionalRows<SavedRecurringPreferences>("recurring_prefs"),
+    ]);
     return {
       accounts,
       categories,
       transactions: records.map((t) => this.normalize("transactions", t)),
       recurring: recurring.map((r) => this.normalize("recurring", r)),
-      recurring_occurrences: recurringOccurrences,
+      recurring_occurrences: recurringOccurrences.map((o) =>
+        this.normalize("recurring_occurrences", o),
+      ),
+      recurring_prefs: recurringPrefs[0]
+        ? this.normalize("recurring_prefs", recurringPrefs[0])
+        : { ...defaultRecurringPreferences },
     };
+  }
+  private prepareBody<K extends Table>(
+    table: K,
+    value: Record<string, unknown>,
+    userId: string,
+  ): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      ...value,
+      user_id: userId,
+    };
+    for (const key of [
+      "to_account_id",
+      "category_id",
+      "end_date",
+      "match_source",
+      "match_reason",
+    ]) {
+      if (body[key] === null) body[key] = "";
+    }
+    if (table === "recurring_prefs" && "dismissed_keys" in body) {
+      body.dismissed_keys = serializeDismissedKeys(body.dismissed_keys);
+    }
+    return body;
   }
   async save<K extends Table>(
     table: K,
@@ -293,13 +368,7 @@ export class PocketBaseBackend {
   ): Promise<RecordTypes[K]> {
     if (!this.session) throw new Error("Please sign in.");
     const session = this.session;
-    const body: Record<string, unknown> = {
-      ...value,
-      user_id: this.session.user.id,
-    };
-    for (const key of ["to_account_id", "category_id", "end_date"])
-      if (body[key as keyof typeof body] === null)
-        Object.assign(body, { [key]: "" });
+    const body = this.prepareBody(table, value, session.user.id);
     const record = await this.request<RecordTypes[K]>(
       `/api/collections/fuloos_${table}/records${id ? "/" + encodeURIComponent(id) : ""}`,
       { method: id ? "PATCH" : "POST", body: JSON.stringify(body) },
@@ -326,6 +395,41 @@ export class PocketBaseBackend {
         ...r,
         category_id: r.category_id || null,
         end_date: r.end_date || null,
+      } as RecordTypes[K];
+    }
+    if (table === "recurring_occurrences") {
+      const occ = record as RecurringOccurrenceRecord & {
+        match_source?: string;
+        match_reason?: string;
+      };
+      const normalized: RecurringOccurrenceRecord = { ...occ };
+      if (occ.match_source === "auto" || occ.match_source === "manual") {
+        normalized.match_source = occ.match_source;
+      } else {
+        delete normalized.match_source;
+      }
+      if (occ.match_reason) {
+        normalized.match_reason = String(occ.match_reason);
+      } else {
+        delete normalized.match_reason;
+      }
+      return normalized as RecordTypes[K];
+    }
+    if (table === "recurring_prefs") {
+      const pref = record as {
+        id: string;
+        auto_detect?: string;
+        auto_match?: string;
+        dismissed_keys?: unknown;
+      };
+      return {
+        id: pref.id,
+        auto_detect: pref.auto_detect === "off" ? "off" : "on",
+        auto_match:
+          pref.auto_match === "review" || pref.auto_match === "off"
+            ? pref.auto_match
+            : "auto",
+        dismissed_keys: parseDismissedKeys(pref.dismissed_keys),
       } as RecordTypes[K];
     }
     return record;
@@ -399,19 +503,15 @@ export class PocketBaseBackend {
       >("/api/batch", {
         method: "POST",
         body: JSON.stringify({
-          requests: chunk.map((value) => {
-            const body: Record<string, unknown> = {
-              ...value,
-              user_id: session.user.id,
-            };
-            for (const key of ["to_account_id", "category_id", "end_date"])
-              if (body[key] === null) body[key] = "";
-            return {
-              method: "POST",
-              url: `/api/collections/fuloos_${table}/records`,
-              body,
-            };
-          }),
+          requests: chunk.map((value) => ({
+            method: "POST",
+            url: `/api/collections/fuloos_${table}/records`,
+            body: this.prepareBody(
+              table,
+              value as Record<string, unknown>,
+              session.user.id,
+            ),
+          })),
         }),
       });
       if (

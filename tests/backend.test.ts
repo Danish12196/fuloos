@@ -369,7 +369,7 @@ test("batch imports stop when the session changes and warn on uncertain network 
   );
 });
 
-test("PocketBase load fetches all 5 collections, normalizes relations and empty strings to null", async () => {
+test("PocketBase load fetches all 6 collections, normalizes relations, recurring prefs and empty strings to null", async () => {
   const f = fixture();
   f.queue.push(
     json(auth),
@@ -439,6 +439,19 @@ test("PocketBase load fetches all 5 collections, normalizes relations and empty 
           recurring_id: "rec1",
           occurrence_date: "2026-01-01",
           transaction_id: "tx1",
+          match_source: "manual",
+          match_reason: "Manual link",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({
+      items: [
+        {
+          id: "pref1",
+          auto_detect: 'on',
+          auto_match: "auto",
+          dismissed_keys: JSON.stringify(["rec1:2026-01-01:tx1"]),
         },
       ],
       totalPages: 1,
@@ -453,6 +466,10 @@ test("PocketBase load fetches all 5 collections, normalizes relations and empty 
   assert.equal(ledger.transactions.length, 1);
   assert.equal(ledger.recurring?.length, 1);
   assert.equal(ledger.recurring_occurrences?.length, 1);
+  assert.equal(ledger.recurring_prefs?.id, "pref1");
+  assert.equal(ledger.recurring_prefs?.auto_detect, 'on');
+  assert.equal(ledger.recurring_prefs?.auto_match, "auto");
+  assert.deepEqual(ledger.recurring_prefs?.dismissed_keys, ["rec1:2026-01-01:tx1"]);
 
   // Transactions normalization: "" -> null
   assert.equal(ledger.transactions[0].to_account_id, null);
@@ -468,14 +485,17 @@ test("PocketBase load fetches all 5 collections, normalizes relations and empty 
   assert.equal(ledger.recurring_occurrences![0].id, "occ1");
   assert.equal(ledger.recurring_occurrences![0].recurring_id, "rec1");
   assert.equal(ledger.recurring_occurrences![0].transaction_id, "tx1");
+  assert.equal(ledger.recurring_occurrences![0].match_source, "manual");
+  assert.equal(ledger.recurring_occurrences![0].match_reason, "Manual link");
 
-  // Verify that all 5 collections were requested
+  // Verify that all 6 collections were requested
   const paths = f.calls.slice(1).map((c) => c.url);
   assert.ok(paths.some((p) => p.includes("/fuloos_accounts/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_categories/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_transactions/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring_occurrences/records")));
+  assert.ok(paths.some((p) => p.includes("/fuloos_recurring_prefs/records")));
 });
 
 test("PocketBase recurring saves normalize null category_id and end_date on write and restore nulls on read", async () => {
@@ -588,6 +608,8 @@ test("PocketBase recurring_occurrences saves link and remove deletes records on 
       recurring_id: "rec-1",
       occurrence_date: "2026-03-01",
       transaction_id: "tx-1",
+      match_source: "auto",
+      match_reason: "High similarity",
     }),
     // remove recurring (204)
     new Response(null, { status: 204 }),
@@ -601,6 +623,8 @@ test("PocketBase recurring_occurrences saves link and remove deletes records on 
     recurring_id: "rec-1",
     occurrence_date: "2026-03-01",
     transaction_id: "tx-1",
+    match_source: "auto",
+    match_reason: "High similarity",
   });
 
   const occCall = f.calls[1];
@@ -612,6 +636,8 @@ test("PocketBase recurring_occurrences saves link and remove deletes records on 
   const occBody = JSON.parse(String(occCall.init.body));
   assert.equal(occBody.user_id, "user-a");
   assert.equal(occBody.recurring_id, "rec-1");
+  assert.equal(occBody.match_source, "auto");
+  assert.equal(occBody.match_reason, "High similarity");
   assert.equal(occ.id, "ro-123");
 
   // Remove recurring schedule
@@ -633,6 +659,58 @@ test("PocketBase recurring_occurrences saves link and remove deletes records on 
   );
 });
 
+test("PocketBase recurring_prefs saves serialize dismissed_keys and normalize fields", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json({
+      id: "pref-new",
+      auto_detect: 'off',
+      auto_match: "manual",
+      dismissed_keys: '["k1","k2"]',
+    }),
+    json({
+      id: "pref-new",
+      auto_detect: 'on',
+      auto_match: "auto",
+      dismissed_keys: '["k1"]',
+    }),
+  );
+
+  await f.backend.signIn("test@example.test", "test-only-password");
+
+  const created = await f.backend.save("recurring_prefs", {
+    auto_detect: 'off',
+    auto_match: "manual",
+    dismissed_keys: ["k1", "k2"],
+  });
+
+  const createCall = f.calls[1];
+  assert.equal(createCall.init.method, "POST");
+  assert.equal(
+    createCall.url,
+    "https://pb.example.test/api/collections/fuloos_recurring_prefs/records",
+  );
+  const createBody = JSON.parse(String(createCall.init.body));
+  assert.equal(createBody.user_id, "user-a");
+  assert.equal(createBody.auto_detect, 'off');
+  assert.equal(createBody.auto_match, "manual");
+  assert.equal(createBody.dismissed_keys, '["k1","k2"]');
+  assert.deepEqual(created.dismissed_keys, ["k1", "k2"]);
+
+  const updated = await f.backend.save(
+    "recurring_prefs",
+    {
+      auto_detect: 'on',
+      auto_match: "auto",
+      dismissed_keys: ["k1"],
+    },
+    "pref-new",
+  );
+  assert.equal(f.calls[2].init.method, "PATCH");
+  assert.deepEqual(updated.dismissed_keys, ["k1"]);
+});
+
 test("PocketBase load degrades recurring collections to empty arrays on 404 pre-migration while keeping core collections strict", async () => {
   const f = fixture();
   f.queue.push(
@@ -642,6 +720,7 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
     json({ items: [], totalPages: 1 }), // transactions
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring not migrated yet
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_occurrences not migrated yet
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_prefs not migrated yet
   );
 
   await f.backend.signIn("test@example.test", "test-only-password");
@@ -651,10 +730,16 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
   assert.deepEqual(ledger.transactions, []);
   assert.deepEqual(ledger.recurring, []);
   assert.deepEqual(ledger.recurring_occurrences, []);
+  assert.deepEqual(ledger.recurring_prefs, {
+    auto_detect: 'on',
+    auto_match: "auto",
+    dismissed_keys: [],
+  });
 
   // Core collection 404 still rejects loudly
   f.queue.push(
     json({ message: "Missing collection context.", data: {} }, 404),
+    json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),

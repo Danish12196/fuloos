@@ -6,9 +6,17 @@ export type AccountType =
   | "other";
 export type Kind = "expense" | "income" | "transfer";
 export type RecurringKind = "expense" | "income";
-export type RecurringFrequency = "daily" | "weekly" | "monthly" | "yearly";
+export type RecurringFrequency =
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "quarterly"
+  | "yearly";
 export type RecurringAmountType = "fixed" | "variable";
 export type RecurringStatus = "active" | "paused";
+export type OccurrenceMatchSource = "manual" | "auto";
+export type AutoDetectSetting = "on" | "off";
+export type AutoMatchSetting = "auto" | "review" | "off";
 export interface Account {
   id: string;
   name: string;
@@ -55,13 +63,27 @@ export interface RecurringOccurrenceRecord {
   recurring_id: string;
   occurrence_date: string;
   transaction_id: string;
+  match_source?: OccurrenceMatchSource;
+  match_reason?: string;
 }
+export interface RecurringPreferences {
+  id?: string;
+  auto_detect: AutoDetectSetting;
+  auto_match: AutoMatchSetting;
+  dismissed_keys: string[];
+}
+export const defaultRecurringPreferences: RecurringPreferences = {
+  auto_detect: "on",
+  auto_match: "auto",
+  dismissed_keys: [],
+};
 export interface Ledger {
   accounts: Account[];
   categories: Category[];
   transactions: Transaction[];
   recurring?: RecurringSchedule[];
   recurring_occurrences?: RecurringOccurrenceRecord[];
+  recurring_prefs?: RecurringPreferences;
 }
 export const emptyLedger: Ledger = {
   accounts: [],
@@ -69,6 +91,7 @@ export const emptyLedger: Ledger = {
   transactions: [],
   recurring: [],
   recurring_occurrences: [],
+  recurring_prefs: defaultRecurringPreferences,
 };
 export function minor(value: string): number {
   if (!/^-?\d+(\.\d{1,2})?$/.test(value.trim()))
