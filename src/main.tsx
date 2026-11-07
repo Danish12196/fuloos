@@ -1153,7 +1153,13 @@ function App() {
           email={session.user.email}
           onClose={() => setDeleteOpen(false)}
           onDelete={async (progress) => {
-            await backend!.deleteAccount(progress);
+            try {
+              await backend!.deleteAccount(progress);
+            } catch (e) {
+              // Some records may already be gone; show what is left on the server.
+              void load();
+              throw e;
+            }
             setDeleteOpen(false);
             setLedger(emptyLedger);
           }}

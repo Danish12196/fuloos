@@ -301,6 +301,7 @@ test("deleteAccount removes recurring schedules and transactions in batches befo
   calls.length = 0;
   const txIds = Array.from({ length: 150 }, (_, i) => ({ id: `t${i}` }));
   queue.push(
+    json({ message: "Failed to delete record." }, 400), // guard blocked the cascade
     json({ message: "Missing collection." }, 404), // recurring not installed
     json({ items: txIds, totalPages: 1 }),
     json([]),
@@ -309,10 +310,11 @@ test("deleteAccount removes recurring schedules and transactions in batches befo
   );
   const steps: string[] = [];
   await backend.deleteAccount((s) => steps.push(s));
-  assert.match(calls[0].url, /fuloos_recurring\/records\?.*fields=id/);
-  assert.match(calls[1].url, /fuloos_transactions\/records/);
+  assert.match(calls[0].url, /fuloos_users\/records\/user-a$/);
+  assert.match(calls[1].url, /fuloos_recurring\/records\?.*fields=id/);
+  assert.match(calls[2].url, /fuloos_transactions\/records/);
   const batches = calls
-    .slice(2, 4)
+    .slice(3, 5)
     .map((c) => JSON.parse(String(c.init.body)).requests);
   assert.deepEqual(
     batches.map((b) => b.length),
@@ -323,20 +325,33 @@ test("deleteAccount removes recurring schedules and transactions in batches befo
     batches[1][49].url,
     "/api/collections/fuloos_transactions/records/t149",
   );
-  assert.equal(calls[4].init.method, "DELETE");
-  assert.match(calls[4].url, /fuloos_users\/records\/user-a$/);
+  assert.equal(calls[5].init.method, "DELETE");
+  assert.match(calls[5].url, /fuloos_users\/records\/user-a$/);
   assert.equal(await backend.getSession(), null);
   assert.ok(steps.at(-1)?.includes("account"));
 
-  // A server without the lockdown migration answers 403 on the user delete.
+  // An empty account goes in one request.
   queue.push(
     json({ token: "tok", record: { id: "user-a", email: "a@example.test" } }),
   );
   await backend.signIn("a@example.test", "pw-for-tests");
+  calls.length = 0;
+  queue.push(new Response(null, { status: 204 }));
+  await backend.deleteAccount();
+  assert.equal(calls.length, 1);
+
+  // Without the lockdown migration the user delete is refused before anything is removed.
   queue.push(
-    json({ items: [], totalPages: 1 }),
-    json({ items: [], totalPages: 1 }),
+    json({ token: "tok", record: { id: "user-a", email: "a@example.test" } }),
+  );
+  await backend.signIn("a@example.test", "pw-for-tests");
+  calls.length = 0;
+  queue.push(
     json({ message: "Only superusers can perform this action." }, 403),
   );
-  await assert.rejects(backend.deleteAccount(), /isn't enabled on the server/);
+  await assert.rejects(
+    backend.deleteAccount(),
+    /isn't enabled on the server.*Nothing was deleted/,
+  );
+  assert.equal(calls.length, 1);
 });

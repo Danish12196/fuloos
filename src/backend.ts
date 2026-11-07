@@ -627,6 +627,26 @@ export class PocketBaseBackend {
   ): Promise<void> {
     const session = this.session;
     if (!session) throw new Error("Please sign in.");
+    const deleteUser = () =>
+      this.request(
+        `/api/collections/fuloos_users/records/${encodeURIComponent(session.user.id)}`,
+        { method: "DELETE" },
+      );
+    // Try the user first: nothing is removed if the server doesn't allow self-delete yet,
+    // and an account with no transactions or schedules is deleted in one request.
+    progress("Deleting your account…");
+    try {
+      await deleteUser();
+      this.publish(null);
+      return;
+    } catch (e) {
+      if (e instanceof BackendError && e.status === 403)
+        throw new Error(
+          "Account deletion isn't enabled on the server yet. Apply the latest PocketBase migration and try again. Nothing was deleted.",
+        );
+      if (!(e instanceof BackendError) || e.status !== 400) throw e;
+      // 400: a delete guard blocked the cascade. Remove what the guards protect, then retry.
+    }
     for (const [collection, label] of [
       ["fuloos_recurring", "recurring schedules"],
       ["fuloos_transactions", "transactions"],
@@ -650,18 +670,7 @@ export class PocketBaseBackend {
       }
     }
     progress("Deleting your account…");
-    try {
-      await this.request(
-        `/api/collections/fuloos_users/records/${encodeURIComponent(session.user.id)}`,
-        { method: "DELETE" },
-      );
-    } catch (e) {
-      if (e instanceof BackendError && e.status === 403)
-        throw new Error(
-          "Account deletion isn't enabled on the server yet. Apply the latest PocketBase migration and try again.",
-        );
-      throw e;
-    }
+    await deleteUser();
     this.publish(null);
   }
   async remove(table: Table, id: string): Promise<void> {
