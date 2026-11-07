@@ -22,12 +22,11 @@ export function DeleteMoneyAccountDialog({
   account: Account;
   plan: AccountDeletionPlan;
   onClose: () => void;
-  onDelete: (progress: (step: string) => void) => Promise<void>;
+  /** Starts the deletion; it runs in the background queue and the dialog closes. */
+  onDelete: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [step, setStep] = useState("");
   const [error, setError] = useState("");
   const phrase = deleteAccountPhrase(account.name);
   const confirmed = confirmsAccountDeletion(typed, account.name);
@@ -40,13 +39,13 @@ export function DeleteMoneyAccountDialog({
   const cancelButton = useRef<HTMLButtonElement>(null);
   const close = () => {
     if (counting) setCountdown(null);
-    else if (!busy) onClose();
+    else onClose();
   };
   useEffect(() => {
     if (countdown === null) return;
     if (countdown === 0) {
       setCountdown(null);
-      void runDelete();
+      runDelete();
       return;
     }
     const timer = setTimeout(
@@ -57,21 +56,18 @@ export function DeleteMoneyAccountDialog({
   }, [countdown]);
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!confirmed || busy || counting) return;
+    if (!confirmed || counting) return;
     setError("");
     setCountdown(DELETE_COUNTDOWN_SECONDS);
     // The input is locked during the countdown, so put focus on the way out.
     setTimeout(() => cancelButton.current?.focus());
   }
-  async function runDelete() {
-    setBusy(true);
+  function runDelete() {
     setError("");
     try {
-      await onDelete(setStep);
+      onDelete();
     } catch (err) {
       setError(errorMessage(err));
-      setBusy(false);
-      setStep("");
     }
   }
   const count = plan.transactionIds.length;
@@ -136,16 +132,16 @@ export function DeleteMoneyAccountDialog({
             spellCheck={false}
             placeholder={phrase}
             value={typed}
-            disabled={busy || counting}
+            disabled={counting}
             onChange={(e) => setTyped(e.target.value)}
           />
         </label>
         {counting && (
           <p className="typed-confirm-countdown" role="status">
-            Deleting in {countdown}… Press Cancel to stop.
+            Deleting in {countdown}… Press Cancel to stop. Progress will show in
+            the corner once it starts.
           </p>
         )}
-        {step && <p className="form-hint">{step}</p>}
         {error && (
           <div className="error" role="alert">
             {error}
@@ -155,21 +151,13 @@ export function DeleteMoneyAccountDialog({
           <button
             type="button"
             className="secondary"
-            disabled={busy}
             onClick={close}
             ref={cancelButton}
           >
             {counting ? `Cancel (${countdown})` : "Cancel"}
           </button>
-          <button
-            className="primary danger"
-            disabled={busy || counting || !confirmed}
-          >
-            {busy
-              ? "Deleting…"
-              : counting
-                ? `Deleting in ${countdown}…`
-                : "Delete account"}
+          <button className="primary danger" disabled={counting || !confirmed}>
+            {counting ? `Deleting in ${countdown}…` : "Delete account"}
           </button>
         </div>
       </form>

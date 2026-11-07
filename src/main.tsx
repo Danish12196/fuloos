@@ -1043,40 +1043,58 @@ function App() {
       setBusy(false);
     }
   }
-  /** Deletes a money account with its recurring schedules and every transaction touching it. */
-  async function deleteMoneyAccount(
-    account: Account,
-    progress: (step: string) => void,
-  ) {
+  /**
+   * Deletes a money account with its recurring schedules and every transaction touching it.
+   * The account leaves the screen at once and the server work runs in the background queue,
+   * so its progress shows in the corner panel instead of inside the dialog.
+   */
+  function deleteMoneyAccount(account: Account) {
+    const plural = (n: number, one: string) =>
+      `${n} ${one}${n === 1 ? "" : "s"}`;
     const plan = planAccountDeletion(ledger, account.id);
     setError("");
-    if (demo) {
-      setLedger((l) => applyAccountDeletion(l, account.id, plan));
-    } else {
+    if (!demo) {
       if (!backend || !session) throw new Error("Please sign in.");
-      const current = generation.current;
-      const total = plan.transactionIds.length;
-      try {
-        if (plan.recurringIds.length) {
-          progress("Deleting recurring schedules…");
-          await backend.removeMany("recurring", plan.recurringIds);
-        }
-        let done = 0;
-        if (total) progress(`Deleting transactions (0 of ${total})…`);
-        await backend.removeMany("transactions", plan.transactionIds, (ids) => {
-          done += ids.length;
-          progress(`Deleting transactions (${done} of ${total})…`);
-        });
-        progress("Deleting the account…");
-        await backend.remove("accounts", account.id);
-      } catch (e) {
-        // Some records may already be gone; show what is left on the server.
-        if (current === generation.current) void load();
-        throw e;
-      }
-      if (current !== generation.current) return;
-      setLedger((l) => applyAccountDeletion(l, account.id, plan));
+      const api = backend;
+      const stillOwner = ownerGuard();
+      const recurringCount = plan.recurringIds.length;
+      const txCount = plan.transactionIds.length;
+      const parts = [
+        txCount && plural(txCount, "transaction"),
+        recurringCount && plural(recurringCount, "schedule"),
+      ].filter(Boolean);
+      queue.enqueue({
+        label: `Delete ${account.name}${parts.length ? ` · ${parts.join(", ")}` : ""}`,
+        total: recurringCount + txCount + 1,
+        run: async (ctx) => {
+          checkOwner(stillOwner);
+          let done = 0;
+          try {
+            if (recurringCount) {
+              await api.removeMany("recurring", plan.recurringIds);
+              done += recurringCount;
+              ctx.progress(done);
+            }
+            await api.removeMany("transactions", plan.transactionIds, (ids) => {
+              for (const id of ids) savedTx.current.delete(id);
+              done += ids.length;
+              ctx.progress(done);
+            });
+            checkOwner(stillOwner);
+            await api.remove("accounts", account.id);
+            // An earlier queued save may have put a deleted record back on screen.
+            if (stillOwner())
+              setLedger((l) => applyAccountDeletion(l, account.id, plan));
+          } catch (e) {
+            // Some records may already be gone; show what is left on the server.
+            if (stillOwner()) await load();
+            throw e;
+          }
+        },
+      });
     }
+    // Take the account off the screen straight away; a failure reloads the ledger.
+    setLedger((l) => applyAccountDeletion(l, account.id, plan));
     const removed = new Set(plan.transactionIds);
     setSelected((old) => new Set([...old].filter((v) => !removed.has(v))));
     if (accountFilter === account.id) setAccountFilter("");
@@ -1354,7 +1372,7 @@ function App() {
           account={accountToDelete}
           plan={planAccountDeletion(ledger, accountToDelete.id)}
           onClose={() => setAccountToDelete(null)}
-          onDelete={(progress) => deleteMoneyAccount(accountToDelete, progress)}
+          onDelete={() => deleteMoneyAccount(accountToDelete)}
         />
       )}
       <main>
