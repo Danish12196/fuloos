@@ -1069,6 +1069,9 @@ function App() {
             });
             checkOwner(stillOwner);
             await api.remove("accounts", account.id);
+            // An earlier queued save may have put a deleted record back on screen.
+            if (stillOwner())
+              setLedger((l) => applyAccountDeletion(l, account.id, plan));
           } catch (e) {
             // Some records may already be gone; show what is left on the server.
             if (stillOwner()) await load();
