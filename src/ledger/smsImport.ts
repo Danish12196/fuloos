@@ -2,9 +2,7 @@
    user confirms are saved, and the SMS text itself is never stored. */
 import { validateTransaction, type Ledger } from "../domain.ts";
 import { transactionKey, type ImportTransaction } from "../csv.ts";
-import { categorise, type CategorySuggestion } from "./categoriser.ts";
-import type { LoadedModel } from "./model.ts";
-import type { CategoryMap } from "./mapping.ts";
+import type { UserSuggestion } from "./learning.ts";
 import {
   bankForMessage,
   bankFromSender,
@@ -30,7 +28,7 @@ export interface SmsPreviewRow {
   parsed: ParsedSms | null;
   transaction: ImportTransaction | null;
   dateSource: "sms" | "backup" | "fallback" | null;
-  suggestion: CategorySuggestion | null;
+  suggestion: UserSuggestion | null;
   duplicate: boolean;
   /** The same SMS (same bank, text and received date) appeared earlier in this batch. */
   repeated: boolean;
@@ -76,8 +74,8 @@ export function previewSms(
   messages: RawSms[],
   options: SmsImportOptions,
   ledger: Ledger,
-  model: LoadedModel | null,
-  map: CategoryMap,
+  /** Category (and learned payee) suggestion for an expense: see suggestCategory() in learning.ts. */
+  suggest: (merchant: string | null, amountAed: number) => UserSuggestion,
 ): SmsPreviewRow[] {
   const seenText = new Set<string>();
   const batchBank =
@@ -132,14 +130,8 @@ export function previewSms(
       const type = parsed.direction === "debit" ? "expense" : "income";
       let category_id: string | null = null;
       if (type === "expense") {
-        row.suggestion = categorise(
-          model,
-          parsed.merchant_clean,
-          parsed.amount_aed,
-        );
-        category_id = row.suggestion.category
-          ? (map[row.suggestion.category] ?? null)
-          : null;
+        row.suggestion = suggest(parsed.merchant_clean, parsed.amount_aed);
+        category_id = row.suggestion.category_id;
       }
       const foreign =
         parsed.currency && parsed.currency !== "AED"
@@ -153,6 +145,7 @@ export function previewSms(
         type,
         amount: Math.round(parsed.amount_aed * 100),
         payee:
+          row.suggestion?.payee ||
           displayPayee(parsed.merchant_clean) ||
           PAYEE_FOR_TYPE[parsed.txn_type] ||
           "",

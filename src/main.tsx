@@ -2,7 +2,12 @@ import { BulkEdit } from "./BulkEdit";
 import { ColorPicker, EmojiField } from "./Appearance";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { backend, createPresetStore, type Session } from "./client";
+import {
+  backend,
+  createLearningStore,
+  createPresetStore,
+  type Session,
+} from "./client";
 import { DeleteAccountDialog } from "./DeleteAccount";
 import { ConfirmHost } from "./ConfirmHost";
 import { confirmDialog } from "./dialogStore";
@@ -208,6 +213,10 @@ function App() {
       return { ...l, [table]: [...kept, ...byId.values()] } as Ledger;
     });
   }
+  const learningStore = useMemo(
+    () => createLearningStore(!demo && !!session),
+    [demo, session?.user.id],
+  );
   const presetStore = useMemo(
     () => createPresetStore(!demo && !!session),
     [demo, session?.user.id],
@@ -1919,6 +1928,7 @@ function App() {
         <SmsImport
           ledger={ledger}
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
+          learning={learningStore}
           onClose={() => setSmsOpen(false)}
           onImport={(rows, progress) =>
             importTransactions(rows, progress, "SMS import:")

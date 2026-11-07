@@ -22,7 +22,9 @@ export type Table =
   | "recurring_occurrences"
   | "recurring_prefs"
   | "csv_presets"
-  | "budgets";
+  | "budgets"
+  | "ml_settings"
+  | "ml_examples";
 export interface CsvPresetRecord {
   id: string;
   name: string;
@@ -39,7 +41,30 @@ type RecordTypes = {
   recurring_prefs: SavedRecurringPreferences;
   csv_presets: CsvPresetRecord;
   budgets: Budget;
+  ml_settings: MlSettingsRecord;
+  ml_examples: MlExampleRecord;
 };
+/** AI suggestion settings and correction log (see src/ledger/learning.ts). */
+export interface MlSettingsRecord {
+  id: string;
+  learn_consent: boolean;
+  share_consent?: boolean;
+  consent_version: string;
+  consent_at: string;
+  category_map: unknown;
+}
+export interface MlExampleRecord {
+  id: string;
+  merchant_text: string;
+  payee: string;
+  amount: number;
+  category_id: string | null;
+  source: "sms" | "csv" | "manual";
+  model_version: string;
+  suggested_category: string;
+  accepted: boolean;
+  created?: string;
+}
 export const IMPORT_BATCH_SIZE = 100;
 type AuthResponse = { token: string; record: { id: string; email: string } };
 interface StorageLike {
@@ -356,6 +381,14 @@ export class PocketBaseBackend {
       throw e;
     }
   }
+  /** Every record of an owner-only collection (throws MissingCollectionError when it isn't installed). */
+  async list<K extends "ml_settings" | "ml_examples">(
+    table: K,
+  ): Promise<RecordTypes[K][]> {
+    if (!this.session) throw new Error("Please sign in.");
+    const rows = await this.rows<RecordTypes[K]>(table);
+    return rows.map((r) => this.normalize(table, r));
+  }
   async listCsvPresets(): Promise<CsvPresetRecord[]> {
     if (!this.session) throw new Error("Please sign in.");
     return this.rows<CsvPresetRecord>("csv_presets");
@@ -470,6 +503,10 @@ export class PocketBaseBackend {
         delete normalized.match_reason;
       }
       return normalized as RecordTypes[K];
+    }
+    if (table === "ml_examples") {
+      const e = record as MlExampleRecord;
+      return { ...e, category_id: e.category_id || null } as RecordTypes[K];
     }
     if (table === "budgets") {
       const b = record as Budget;
