@@ -1360,9 +1360,9 @@ function App() {
       (s, a) => s + balance(a, ledger.transactions),
       0,
     );
-  const balanceNote = (a: Account) =>
+  const balanceNote = (a: Account, short = false) =>
     hasBalanceAnchor(a)
-      ? `${concealed(a.opening_balance)} at end of ${new Date(
+      ? `${concealed(a.opening_balance)}${short ? " · " : " at end of "}${new Date(
           balanceAsOfDate(a) + "T12:00:00Z",
         ).toLocaleDateString("en-GB", {
           day: "numeric",
@@ -2020,7 +2020,7 @@ function App() {
                           <b>{a.name}</b>
                         </button>
                         <span className="muted">{types[a.type]}</span>
-                        <span className="muted">{balanceNote(a)}</span>
+                        <span className="muted">{balanceNote(a, true)}</span>
                         <strong
                           className={`num ${value < 0 ? "is-negative" : ""}`}
                         >
