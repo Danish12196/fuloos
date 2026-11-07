@@ -10,6 +10,7 @@ The frontend runs on Vercel. PocketBase runs on your existing persistent server 
    - `1793795400_import_appearance.js` — enables zero-fils amounts and account/category emoji fields.
    - `1793881800_recurring.js` — creates `fuloos_recurring` and `fuloos_recurring_occurrences` with per-user ownership rules, unique indexes, and relational integrity triggers.
    - `1793968200_recurring_automation.js` — adds `quarterly` frequency, `match_source` and `match_reason` on occurrences, and creates `fuloos_recurring_prefs` collection with per-user ownership rules and triggers.
+   - `1794054600_csv_presets.js` — creates `fuloos_csv_presets` so CSV column-mapping presets are stored per user and follow them across devices.
 3. Run `./pocketbase migrate up` using the instance's existing data and migrations paths, then restart PocketBase. Alternatively, the standard server applies pending migrations on startup. Use the existing container/service's normal deployment process, rather than starting a second instance over the same database.
 4. Keep HTTPS enabled. If the server restricts allowed origins, allow the exact Vercel production origin and localhost development origin. Do not put administrator tokens into Vercel frontend variables.
 5. Set `VITE_POCKETBASE_URL=https://pb.danishali.dev` as a **build** environment variable, then rebuild/redeploy the frontend. Without it, Fuloos remains an explicitly labeled in-memory demo.
@@ -34,6 +35,14 @@ API rules scope every ledger and recurring record to its owner and prevent reass
 - **`fuloos_recurring_occurrences`**: Adds optional `match_source` (`auto | manual`) and `match_reason` fields to track provenance and explain automatic transaction linkages.
 - **`fuloos_recurring_prefs`**: Stores user automation preferences (`user_id`, `auto_detect` in `on | off`, `auto_match` in `auto | review | off`, and `dismissed_keys` JSON array).
 - **Triggers & Data Integrity**: Preserves cross-tenant isolation and per-user uniqueness (`UNIQUE(user_id)`). Validates that user preferences cannot reference another user's account or ledger records.
+
+### CSV import presets (`1794054600_csv_presets.js`)
+
+- **`fuloos_csv_presets`**: One row per saved column-mapping preset (`user_id`, `name` of 1–80 characters, `name_key` = trimmed lowercase name, and `config` JSON with delimiter, header row, skipped rows, split/flip, decimal separator, date format, saved headers and column mapping). Owner-only API rules match the other collections.
+- **Uniqueness & validation**: `UNIQUE(user_id, name_key)` keeps preset names unique per user, ignoring case. Triggers reject blank or over-long names, non-object `config` values, and ownership changes. The app validates the full preset shape again when it loads records.
+- **Upgrade from browser-only presets**: the first time a signed-in user opens the CSV import dialog, presets saved in that browser by older versions are uploaded to their account (a preset whose name already exists in the account is kept as the account version) and then removed from the browser, so a different account signing in later on the same browser does not receive them. Presets that fail to upload stay in the browser and are retried next time.
+- **Before the migration is installed** the app keeps presets in the browser, as before, and says so in the dialog. Demo mode always uses browser storage.
+- The down migration deletes `fuloos_csv_presets` and its saved presets; it does not touch ledger data.
 
 Each migration includes a down migration that **deletes its Fuloos collections and their records**. Do not run `migrate down` on real data as a routine fix. Restore a verified backup for a production rollback.
 
