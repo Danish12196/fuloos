@@ -3856,6 +3856,72 @@ button {
     margin-left: 0;
   }
 }
+/* Transactions: bulk delete */
+.bulk-toolbar .danger-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.delete-transactions-rows {
+  display: grid;
+  gap: 2px;
+  max-height: 320px;
+  margin: 14px 0 0;
+  padding: 6px;
+  overflow-y: auto;
+  border-radius: 12px;
+  background: var(--soft-surface);
+  list-style: none;
+  text-align: left;
+}
+.delete-transactions-rows li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px;
+  font-size: 13px;
+}
+.delete-transactions-rows li + li {
+  border-top: 1px solid var(--line);
+}
+.delete-transactions-rows .when {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.delete-transactions-rows .what {
+  display: grid;
+  min-width: 0;
+}
+.delete-transactions-rows .what b,
+.delete-transactions-rows .what small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delete-transactions-rows .what small {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+}
+.delete-transactions-rows .amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.delete-transactions-rows li.more {
+  display: block;
+  color: var(--muted);
+  text-align: center;
+}
+@media (max-width: 560px) {
+  .delete-transactions-rows .when {
+    display: none;
+  }
+  .delete-transactions-rows li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
 /* Settings dialog */
 .settings-modal {
   width: 520px;
