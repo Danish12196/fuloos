@@ -937,6 +937,8 @@ function App() {
     rows: ImportTransaction[],
     progress: (n: number) => void,
     source = "Import",
+    /** Called with how many rows (in order) are confirmed saved; may run after the caller has closed. */
+    onSaved?: (n: number) => void,
   ) {
     rows.forEach((row) => validateTransaction(row, ledger));
     if (demo) {
@@ -948,6 +950,7 @@ function App() {
         ],
       }));
       progress(rows.length);
+      onSaved?.(rows.length);
       return;
     }
     if (!backend || !session) throw new Error("Please sign in.");
@@ -966,6 +969,7 @@ function App() {
               if (!stillOwner()) return;
               mergeRecords("transactions", records);
               ctx.progress(saved);
+              onSaved?.(saved);
             },
             stillOwner,
           );
@@ -1930,8 +1934,8 @@ function App() {
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
           learning={learningStore}
           onClose={() => setSmsOpen(false)}
-          onImport={(rows, progress) =>
-            importTransactions(rows, progress, "SMS import:")
+          onImport={(rows, progress, onSaved) =>
+            importTransactions(rows, progress, "SMS import:", onSaved)
           }
         />
       )}

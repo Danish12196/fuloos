@@ -44,6 +44,8 @@ export function SmsImport({
   onImport: (
     rows: ImportTransaction[],
     progress: (n: number) => void,
+    /** Called with how many of the rows (in order) are confirmed saved, possibly after the dialog closed. */
+    onSaved: (n: number) => void,
   ) => Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -163,7 +165,7 @@ export function SmsImport({
   function updateMap(next: CategoryMap) {
     setMap(next);
     saveMap(owner, next);
-    if (settings && learning.scope === "account") {
+    if (settings) {
       const updated = { ...settings, category_map: next };
       setSettings(updated);
       learning
@@ -171,7 +173,7 @@ export function SmsImport({
         .then(setSettings)
         .catch((e: unknown) =>
           setLearningError(
-            `Could not save the mapping to your account: ${e instanceof Error ? e.message : "unknown error"}`,
+            `Could not save the mapping: ${e instanceof Error ? e.message : "unknown error"}`,
           ),
         );
     }
@@ -266,6 +268,20 @@ export function SmsImport({
     setTotal(selected.length);
     setProgress(0);
     setError("");
+    // Log corrections only for rows confirmed saved, in order, so a failed or retried import is never counted twice.
+    const batch = selected;
+    let recorded = 0;
+    let logging = Promise.resolve();
+    const onSaved = (n: number) => {
+      const fresh = batch.slice(recorded, n);
+      recorded = Math.max(recorded, n);
+      if (!fresh.length) return;
+      logging = logging
+        .then(() => recordCorrections(fresh))
+        .catch(() => {
+          // A failed log write only means less learning; the transactions are saved.
+        });
+    };
     try {
       await onImport(
         selected.map((r) => r.transaction!),
@@ -276,12 +292,8 @@ export function SmsImport({
               new Set([...prev, ...selected.slice(0, n).map((r) => r.index)]),
           );
         },
+        onSaved,
       );
-      try {
-        await recordCorrections(selected);
-      } catch {
-        // The import itself is queued; a failed log write only means less learning.
-      }
       // Saving continues in the background queue.
       onClose();
     } catch (e) {
