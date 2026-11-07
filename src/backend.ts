@@ -673,6 +673,41 @@ export class PocketBaseBackend {
     await deleteUser();
     this.publish(null);
   }
+  /**
+   * Deletes records in batches of IMPORT_BATCH_SIZE. Each batch is all-or-nothing on the server;
+   * `progress` reports the ids confirmed deleted so far so callers can keep local state in step.
+   */
+  async removeMany(
+    table: Table,
+    ids: string[],
+    progress: (deleted: string[]) => void = () => {},
+  ): Promise<void> {
+    const session = this.session;
+    if (!session) throw new Error("Please sign in.");
+    for (let offset = 0; offset < ids.length; offset += IMPORT_BATCH_SIZE) {
+      if (this.session?.user.id !== session.user.id)
+        throw new Error("Session changed. Reload the ledger before retrying.");
+      const chunk = ids.slice(offset, offset + IMPORT_BATCH_SIZE);
+      const result = await this.request<{ status: number }[]>("/api/batch", {
+        method: "POST",
+        body: JSON.stringify({
+          requests: chunk.map((id) => ({
+            method: "DELETE",
+            url: `/api/collections/fuloos_${table}/records/${encodeURIComponent(id)}`,
+          })),
+        }),
+      });
+      if (
+        !Array.isArray(result) ||
+        result.length !== chunk.length ||
+        result.some((r) => r.status < 200 || r.status >= 300)
+      )
+        throw new Error(
+          "The server returned an unexpected batch result. Reload the ledger before retrying.",
+        );
+      progress(chunk);
+    }
+  }
   async remove(table: Table, id: string): Promise<void> {
     if (!this.session) throw new Error("Please sign in.");
     await this.request(
