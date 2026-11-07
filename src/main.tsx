@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, createPresetStore, type Session } from "./client";
 import { DeleteAccountDialog } from "./DeleteAccount";
+import { ConfirmHost } from "./ConfirmHost";
+import { confirmDialog } from "./dialogStore";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
 import {
@@ -921,16 +923,32 @@ function App() {
     table: "accounts" | "categories" | "transactions" | "recurring" | "budgets",
     id: string,
   ) {
-    const promptText =
+    const noun =
+      table === "accounts"
+        ? "account"
+        : table === "categories"
+          ? "category"
+          : table === "transactions"
+            ? "transaction"
+            : table === "recurring"
+              ? "recurring schedule"
+              : "budget";
+    const message =
       table === "recurring"
-        ? "Delete this recurring schedule? Past recorded transactions will stay in your ledger."
+        ? "Past recorded transactions will stay in your ledger."
         : table === "budgets"
-          ? "Delete this budget? Your transactions are not affected."
+          ? "Your transactions are not affected."
           : table === "categories" &&
               (ledger.budgets ?? []).some((b) => b.category_id === id)
-            ? "Delete this category? Its budgets will be removed too. This cannot be undone."
-            : "Delete this item? This cannot be undone.";
-    if (!window.confirm(promptText)) return;
+            ? "Its budgets will be removed too. This cannot be undone."
+            : "This cannot be undone.";
+    const ok = await confirmDialog({
+      title: `Delete this ${noun}?`,
+      message,
+      confirmLabel: `Delete ${noun}`,
+      tone: "danger",
+    });
+    if (!ok) return;
     setBusy(true);
     setError("");
     try {
@@ -2649,5 +2667,6 @@ function Editor({
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
+    <ConfirmHost />
   </React.StrictMode>,
 );

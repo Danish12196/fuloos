@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { confirmDialog } from "./dialogStore";
 import {
   ArrowDownLeft,
   ArrowRight,
@@ -1611,15 +1612,15 @@ export function RecurringPage({
                             disabled={busy}
                             className={`calendar-chip ${ev.status} ${ev.schedule.type}`}
                             title={`${ev.schedule.name} · ${concealed(ev.linkedTransaction?.amount ?? ev.schedule.amount)} (${statusLabels[ev.status]}${ev.confirmation ? " — click to unlink" : ""})`}
-                            onClick={() => {
+                            onClick={async () => {
                               if (ev.confirmation) {
-                                if (
-                                  window.confirm(
-                                    `Unlink confirmation for ${ev.schedule.name} on ${formatFullDate(ev.date)}? The recorded ledger transaction will remain untouched.`,
-                                  )
-                                ) {
-                                  onUnlinkOccurrence(ev.confirmation.id);
-                                }
+                                const confirmationId = ev.confirmation.id;
+                                const ok = await confirmDialog({
+                                  title: `Unlink ${ev.schedule.name}?`,
+                                  message: `This removes the confirmation for ${formatFullDate(ev.date)}. The recorded ledger transaction will remain untouched.`,
+                                  confirmLabel: "Unlink",
+                                });
+                                if (ok) onUnlinkOccurrence(confirmationId);
                               } else {
                                 onConfirmOccurrence(ev.schedule, ev.date);
                               }
