@@ -6,6 +6,8 @@ import { backend, createPresetStore, type Session } from "./client";
 import { DeleteAccountDialog } from "./DeleteAccount";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
+import { QueueDock, useLeaveWarning, useQueue } from "./QueueDock";
+import { TaskQueue } from "./taskQueue";
 import {
   BudgetEditorModal,
   BudgetReportPanel,
@@ -155,6 +157,39 @@ function App() {
     draft?: Partial<BudgetDraft>;
   } | null>(null);
   const generation = useRef(0);
+  // Background saves keep running while the user moves between pages.
+  const queue = useMemo(() => new TaskQueue(), []);
+  const owner = useRef<string | null>(null);
+  owner.current = demo ? null : (session?.user.id ?? null);
+  const { pending: queuePending } = useQueue(queue);
+  useLeaveWarning(queuePending);
+  /** Queued work only runs for the account that queued it. */
+  function ownerGuard() {
+    const id = owner.current;
+    if (!id) throw new Error("Please sign in.");
+    return () => owner.current === id;
+  }
+  function checkOwner(stillOwner: () => boolean) {
+    if (!stillOwner())
+      throw new Error(
+        "You signed out before this finished. Nothing more was saved.",
+      );
+  }
+  /** Add saved records, skipping any a reload already brought in. */
+  function mergeRecords<K extends "transactions" | "categories">(
+    table: K,
+    records: Ledger[K],
+  ) {
+    setLedger((l) => {
+      const byId = new Map(records.map((r) => [r.id, r]));
+      const kept = (l[table] as Ledger[K]).map((r) => {
+        const next = byId.get(r.id);
+        if (next) byId.delete(r.id);
+        return next ?? r;
+      });
+      return { ...l, [table]: [...kept, ...byId.values()] } as Ledger;
+    });
+  }
   const presetStore = useMemo(
     () => createPresetStore(!demo && !!session),
     [demo, session?.user.id],
@@ -167,6 +202,7 @@ function App() {
     setConfirmOcc(null);
     setRecurringTab("schedules");
     setRecurringFilter("all");
+    queue.cancelQueued();
   }, [session?.user.id, demo]);
   function toggleSelection(id: string) {
     setSelected((old) => {
@@ -188,29 +224,36 @@ function App() {
     rows: Transaction[],
     progress: (records: Transaction[]) => void,
   ) {
-    if (busy) throw new Error("Another operation is running.");
     rows.forEach((t) => validateTransaction(t, ledger));
-    const current = generation.current;
-    setBusy(true);
-    try {
-      if (demo) {
-        updateTransactions(rows);
-        progress(rows);
-      } else {
-        if (!backend || !session) throw new Error("Please sign in.");
-        await backend.updateTransactions(
-          rows,
-          (_n, records) => {
-            if (current !== generation.current) return;
-            updateTransactions(records);
-            progress(records);
-          },
-          () => current === generation.current,
-        );
-      }
-    } finally {
-      setBusy(false);
+    if (demo) {
+      updateTransactions(rows);
+      progress(rows);
+      return;
     }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    queue.enqueue({
+      label: `Update ${rows.length} ${rows.length === 1 ? "transaction" : "transactions"}`,
+      total: rows.length,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        try {
+          await api.updateTransactions(
+            rows,
+            (saved, records) => {
+              if (!stillOwner()) return;
+              updateTransactions(records);
+              ctx.progress(saved);
+            },
+            stillOwner,
+          );
+        } catch (e) {
+          if (stillOwner()) void load();
+          throw e;
+        }
+      },
+    });
   }
   useEffect(() => {
     if (!backend) return;
@@ -270,6 +313,19 @@ function App() {
                 : [...l[table], next],
             }) as Ledger,
         );
+      } else if (table === "transactions") {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const api = backend;
+        const stillOwner = ownerGuard();
+        const payee = String(value.payee ?? "").trim();
+        queue.enqueue({
+          label: `${id ? "Update" : "Add"} transaction${payee ? ` · ${payee.slice(0, 40)}` : ""}`,
+          run: async () => {
+            checkOwner(stillOwner);
+            const record = await api.save("transactions", value, id);
+            if (stillOwner()) mergeRecords("transactions", [record]);
+          },
+        });
       } else {
         if (!backend || !session) throw new Error("Please sign in.");
         const record = await backend.save(table, value, id);
@@ -825,34 +881,45 @@ function App() {
   async function importTransactions(
     rows: ImportTransaction[],
     progress: (n: number) => void,
+    source = "Import",
   ) {
-    if (busy) throw new Error("Another operation is running.");
-    setBusy(true);
-    const current = generation.current;
-    try {
-      rows.forEach((row) => validateTransaction(row, ledger));
-      if (demo) {
-        setLedger((l) => ({
-          ...l,
-          transactions: [
-            ...l.transactions,
-            ...rows.map((row) => ({ ...row, id: demoId() })),
-          ],
-        }));
-        progress(rows.length);
-      } else {
-        if (!backend || !session) throw new Error("Please sign in.");
-        await backend.createMany(
-          "transactions",
-          rows,
-          (saved) => progress(saved),
-          () => generation.current === current,
-        );
-      }
-    } finally {
-      if (!demo && generation.current === current) await load();
-      setBusy(false);
+    rows.forEach((row) => validateTransaction(row, ledger));
+    if (demo) {
+      setLedger((l) => ({
+        ...l,
+        transactions: [
+          ...l.transactions,
+          ...rows.map((row) => ({ ...row, id: demoId() })),
+        ],
+      }));
+      progress(rows.length);
+      return;
     }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    queue.enqueue({
+      label: `${source} ${rows.length} ${rows.length === 1 ? "transaction" : "transactions"}`,
+      total: rows.length,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        try {
+          await api.createMany(
+            "transactions",
+            rows,
+            (saved, records) => {
+              if (!stillOwner()) return;
+              mergeRecords("transactions", records);
+              ctx.progress(saved);
+            },
+            stillOwner,
+          );
+        } catch (e) {
+          if (stillOwner()) void load();
+          throw e;
+        }
+      },
+    });
   }
   async function createCategories(
     rows: Omit<Category, "id">[],
@@ -1754,6 +1821,7 @@ function App() {
           </footer>
         </div>
       </main>
+      <QueueDock queue={queue} />
       {bulkItems && (
         <BulkEdit
           items={bulkItems}
@@ -1768,7 +1836,9 @@ function App() {
         <CsvImport
           ledger={ledger}
           onClose={() => setImportOpen(false)}
-          onImport={importTransactions}
+          onImport={(rows, progress) =>
+            importTransactions(rows, progress, "CSV import:")
+          }
           onCreateCategories={createCategories}
           presetStore={presetStore}
           onCreateCategory={async (value) => {
@@ -1781,7 +1851,9 @@ function App() {
           ledger={ledger}
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
           onClose={() => setSmsOpen(false)}
-          onImport={importTransactions}
+          onImport={(rows, progress) =>
+            importTransactions(rows, progress, "SMS import:")
+          }
         />
       )}
       {recurringModal && (
