@@ -7,6 +7,8 @@ import {
   type AccountDeletionPlan,
 } from "./accountDeletion";
 
+const DELETE_COUNTDOWN_SECONDS = 5;
+
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`;
 
@@ -32,12 +34,36 @@ export function DeleteMoneyAccountDialog({
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
+  // After confirming, deletion waits a few seconds so a mistaken click can still be stopped.
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const counting = countdown !== null;
+  const cancelButton = useRef<HTMLButtonElement>(null);
   const close = () => {
-    if (!busy) onClose();
+    if (counting) setCountdown(null);
+    else if (!busy) onClose();
   };
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown === 0) {
+      setCountdown(null);
+      void runDelete();
+      return;
+    }
+    const timer = setTimeout(
+      () => setCountdown((c) => (c === null ? null : c - 1)),
+      1000,
+    );
+    return () => clearTimeout(timer);
+  }, [countdown]);
+  function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!confirmed || busy) return;
+    if (!confirmed || busy || counting) return;
+    setError("");
+    setCountdown(DELETE_COUNTDOWN_SECONDS);
+    // The input is locked during the countdown, so put focus on the way out.
+    setTimeout(() => cancelButton.current?.focus());
+  }
+  async function runDelete() {
     setBusy(true);
     setError("");
     try {
@@ -74,16 +100,31 @@ export function DeleteMoneyAccountDialog({
           <p className="typed-confirm-warning">
             All transactions relating to this account will be deleted.
           </p>
-          <p>
-            {count
-              ? `That is ${plural(count, "transaction")} on ${account.name}.`
-              : `${account.name} has no transactions yet.`}
-            {plan.transferCount > 0 &&
-              ` This includes ${plural(plan.transferCount, "transfer")} to or from other accounts, which will disappear from those accounts too and change their balances.`}
-            {plan.recurringIds.length > 0 &&
-              ` ${plural(plan.recurringIds.length, "recurring schedule")} on this account will also be deleted.`}{" "}
-            This can't be undone.
-          </p>
+          <p>This will permanently delete:</p>
+          <ul className="typed-confirm-list">
+            <li>
+              The account <b>{account.name}</b>
+            </li>
+            <li>
+              {count
+                ? `${plural(count, "transaction")} on this account`
+                : "No transactions (this account has none)"}
+            </li>
+            {plan.transferCount > 0 && (
+              <li>
+                Including {plural(plan.transferCount, "transfer")} to or from
+                other accounts, which also disappear from those accounts and
+                change their balances
+              </li>
+            )}
+            {plan.recurringIds.length > 0 && (
+              <li>
+                {plural(plan.recurringIds.length, "recurring schedule")} on this
+                account
+              </li>
+            )}
+          </ul>
+          <p>This can't be undone.</p>
         </div>
         <label>
           <span>
@@ -95,10 +136,15 @@ export function DeleteMoneyAccountDialog({
             spellCheck={false}
             placeholder={phrase}
             value={typed}
-            disabled={busy}
+            disabled={busy || counting}
             onChange={(e) => setTyped(e.target.value)}
           />
         </label>
+        {counting && (
+          <p className="typed-confirm-countdown" role="status">
+            Deleting in {countdown}… Press Cancel to stop.
+          </p>
+        )}
         {step && <p className="form-hint">{step}</p>}
         {error && (
           <div className="error" role="alert">
@@ -111,11 +157,19 @@ export function DeleteMoneyAccountDialog({
             className="secondary"
             disabled={busy}
             onClick={close}
+            ref={cancelButton}
           >
-            Cancel
+            {counting ? `Cancel (${countdown})` : "Cancel"}
           </button>
-          <button className="primary danger" disabled={busy || !confirmed}>
-            {busy ? "Deleting…" : "Delete account"}
+          <button
+            className="primary danger"
+            disabled={busy || counting || !confirmed}
+          >
+            {busy
+              ? "Deleting…"
+              : counting
+                ? `Deleting in ${countdown}…`
+                : "Delete account"}
           </button>
         </div>
       </form>

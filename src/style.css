@@ -3467,3 +3467,23 @@ button {
 :root[data-theme="dark"] .typed-confirm .typed-confirm-warning {
   color: #f0a597;
 }
+.typed-confirm .typed-confirm-list {
+  margin: 10px 0 0;
+  padding-left: 22px;
+  text-align: left;
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.typed-confirm .typed-confirm-list li + li {
+  margin-top: 4px;
+}
+.typed-confirm .typed-confirm-countdown {
+  margin: 0 0 4px;
+  color: #9e493e;
+  font-weight: 600;
+  text-align: center;
+}
+:root[data-theme="dark"] .typed-confirm .typed-confirm-countdown {
+  color: #f0a597;
+}
