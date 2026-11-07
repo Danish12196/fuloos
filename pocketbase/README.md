@@ -2,6 +2,26 @@
 
 The frontend runs on Vercel. PocketBase runs on your existing persistent server at `https://pb.danishali.dev`; Vercel does not host PocketBase's persistent SQLite process. The public health endpoint returned HTTP 200 and `API is healthy.` on 3 November 2026. No administrator access or installed PocketBase version was available, so pending migrations must be applied by the server operator during deployment.
 
+## Live server checks
+
+Read-only probes of `https://pb.danishali.dev` on 7 November 2026:
+
+- `/api/health` returns 200. CORS preflight allows any origin (`*`) with `content-type,authorization` headers, so both the Vercel origin and `localhost` work.
+- `fuloos_users` exists with email/password and Google OAuth2 enabled; MFA and OTP are off. A wrong password returns 400 `Failed to authenticate.`
+- `fuloos_accounts`, `fuloos_categories` and `fuloos_transactions` exist; unauthenticated lists return empty.
+- Batch requests are enabled.
+- **`fuloos_recurring`, `fuloos_recurring_occurrences` and `fuloos_recurring_prefs` are missing.** Migrations `1793881800_recurring.js` and `1793968200_recurring_automation.js` have not been applied. The app still signs in and loads (recurring data loads as empty), but creating schedules, confirming payments and saving automation preferences fail until they are installed.
+
+The same flow was run on 7 November 2026 against local PocketBase v0.40.6 instances (all four migrations, and only the first two to mirror production) using the app's own `PocketBaseBackend`: sign-up, stored session, session restore, empty ledger load, account create/delete, sign-out, wrong password and duplicate email all behaved correctly. With only the first two migrations, the ledger still loads and only recurring saves fail.
+
+No user was created on the production server. To verify sign-up and sign-in end to end, run the smoke test with a throwaway email. It uses the app's own `PocketBaseBackend`, checks every collection, signs up/in, restores the session in a fresh instance, loads the ledger, creates and deletes one account, signs out and confirms a wrong password is rejected:
+
+```sh
+FULOOS_TEST_EMAIL=you+fuloos-test@example.com FULOOS_TEST_PASSWORD='long-random-password' npm run check:live -- --signup
+```
+
+Omit `--signup` to reuse an existing test user, or omit the credentials to run only the read-only collection checks. Set `FULOOS_PB_URL` to test another server. Users cannot delete themselves (`deleteRule` is null), so remove the test user from the PocketBase dashboard afterwards.
+
 ## Installation & Upgrades
 
 1. Back up the running instance's `pb_data` and existing migration folder. Check its version using `./pocketbase --version`. These migrations use the v0.23+ fields/collection API; review compatibility with the installed version before applying them.

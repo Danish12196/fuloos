@@ -91,7 +91,11 @@ npm test
 npm run build
 ```
 
-Tests cover exact money calculations, transfers, neutral-category usage, recurring schedule generation, cadence fitting and pattern detection, multi-signal transaction matching, intelligent forecasting, PocketBase HTTP adapter behavior, and the migrations' SQLite integrity triggers. The schema test runs the actual migration trigger SQL against embedded SQLite and inspects collection rule definitions; it does not substitute for live PocketBase API isolation tests. Live signup/signin and server migration verification remain pending server access.
+Tests cover exact money calculations, transfers, neutral-category usage, recurring schedule generation, cadence fitting and pattern detection, multi-signal transaction matching, intelligent forecasting, PocketBase HTTP adapter behavior, and the migrations' SQLite integrity triggers. The schema test runs the actual migration trigger SQL against embedded SQLite and inspects collection rule definitions; it does not substitute for live PocketBase API isolation tests. Live signup/signin has not yet been run against the production server; see [Live server checks](pocketbase/README.md#live-server-checks) for what was verified and how to run the smoke test:
+
+```sh
+FULOOS_TEST_EMAIL=you+fuloos-test@example.com FULOOS_TEST_PASSWORD='long-random-password' npm run check:live -- --signup
+```
 
 ## Scope
 
