@@ -383,12 +383,7 @@ export function buildConfirmTransaction(
   if (schedule.amount_type === "variable" && overrides?.amount === undefined)
     throw new Error("Enter the actual amount paid for this variable payment.");
   const account_id = overrides?.account_id ?? schedule.account_id;
-  const account = ledger.accounts.find((a) => a.id === account_id);
-  const date =
-    overrides?.date ??
-    (account && occurrenceDate < account.opening_date
-      ? account.opening_date
-      : occurrenceDate);
+  const date = overrides?.date ?? occurrenceDate;
   const tx: Omit<Transaction, "id"> = {
     type: schedule.type,
     amount: overrides?.amount ?? schedule.amount,
