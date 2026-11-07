@@ -8,6 +8,7 @@ import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
 import { QueueDock, useLeaveWarning, useQueue } from "./QueueDock";
 import { TaskQueue } from "./taskQueue";
+import { rebaseEdit } from "./bulk";
 import {
   BudgetEditorModal,
   BudgetReportPanel,
@@ -162,6 +163,17 @@ function App() {
   const owner = useRef<string | null>(null);
   owner.current = demo ? null : (session?.user.id ?? null);
   const { pending: queuePending } = useQueue(queue);
+  const ledgerRef = useRef(ledger);
+  ledgerRef.current = ledger;
+  // Records saved by queued tasks, so a later task builds on them even
+  // before React has re-rendered with the new ledger.
+  const savedTx = useRef(new Map<string, Transaction>());
+  function latestTransaction(id: string) {
+    return (
+      savedTx.current.get(id) ??
+      ledgerRef.current.transactions.find((t) => t.id === id)
+    );
+  }
   useLeaveWarning(queuePending);
   /** Queued work only runs for the account that queued it. */
   function ownerGuard() {
@@ -180,6 +192,8 @@ function App() {
     table: K,
     records: Ledger[K],
   ) {
+    if (table === "transactions")
+      for (const r of records as Transaction[]) savedTx.current.set(r.id, r);
     setLedger((l) => {
       const byId = new Map(records.map((r) => [r.id, r]));
       const kept = (l[table] as Ledger[K]).map((r) => {
@@ -213,6 +227,7 @@ function App() {
     });
   }
   function updateTransactions(records: Transaction[]) {
+    for (const r of records) savedTx.current.set(r.id, r);
     const byId = new Map(records.map((t) => [t.id, t]));
     setLedger((l) => ({
       ...l,
@@ -233,14 +248,25 @@ function App() {
     if (!backend || !session) throw new Error("Please sign in.");
     const api = backend;
     const stillOwner = ownerGuard();
+    const originals = new Map(
+      ledger.transactions.map((t) => [t.id, t] as const),
+    );
     queue.enqueue({
       label: `Update ${rows.length} ${rows.length === 1 ? "transaction" : "transactions"}`,
       total: rows.length,
       run: async (ctx) => {
         checkOwner(stillOwner);
         try {
+          // Re-apply only the changed fields to the newest copy, so an
+          // earlier queued edit to the same rows is not undone.
+          const fresh = rows.map((row) => {
+            const original = originals.get(row.id);
+            const latest = latestTransaction(row.id);
+            return original && latest ? rebaseEdit(original, row, latest) : row;
+          });
+          fresh.forEach((t) => validateTransaction(t, ledgerRef.current));
           await api.updateTransactions(
-            rows,
+            fresh,
             (saved, records) => {
               if (!stillOwner()) return;
               updateTransactions(records);
@@ -249,7 +275,7 @@ function App() {
             stillOwner,
           );
         } catch (e) {
-          if (stillOwner()) void load();
+          if (stillOwner()) await load();
           throw e;
         }
       },
@@ -277,7 +303,10 @@ function App() {
     setError("");
     try {
       const data = await backend.load();
-      if (current === generation.current) setLedger(data);
+      if (current === generation.current) {
+        savedTx.current.clear();
+        setLedger(data);
+      }
     } catch (e) {
       if (current === generation.current) setError(errorMessage(e));
     } finally {
@@ -318,11 +347,24 @@ function App() {
         const api = backend;
         const stillOwner = ownerGuard();
         const payee = String(value.payee ?? "").trim();
+        const original = id
+          ? ledger.transactions.find((t) => t.id === id)
+          : undefined;
         queue.enqueue({
           label: `${id ? "Update" : "Add"} transaction${payee ? ` · ${payee.slice(0, 40)}` : ""}`,
           run: async () => {
             checkOwner(stillOwner);
-            const record = await api.save("transactions", value, id);
+            const latest = id ? latestTransaction(id) : undefined;
+            const body =
+              original && latest
+                ? rebaseEdit<Record<string, unknown>>(
+                    { ...original },
+                    { ...original, ...value },
+                    { ...latest },
+                  )
+                : value;
+            delete body.id;
+            const record = await api.save("transactions", body, id);
             if (stillOwner()) mergeRecords("transactions", [record]);
           },
         });
@@ -915,7 +957,7 @@ function App() {
             stillOwner,
           );
         } catch (e) {
-          if (stillOwner()) void load();
+          if (stillOwner()) await load();
           throw e;
         }
       },
