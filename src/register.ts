@@ -208,3 +208,32 @@ export function sortRegister(
       b.seq - a.seq,
   );
 }
+
+export interface DayGroup {
+  date: string;
+  entries: RegisterEntry[];
+  /** Money in minus money out for the entries shown that day, in fils. */
+  net: number;
+}
+
+/**
+ * Splits already-sorted entries into runs that share a date, keeping their
+ * order. Used by the relaxed transactions view to show day headers.
+ */
+export function groupByDay(entries: RegisterEntry[]): DayGroup[] {
+  const groups: DayGroup[] = [];
+  for (const e of entries) {
+    const last = groups[groups.length - 1];
+    if (last && last.date === e.tx.date) {
+      last.entries.push(e);
+      last.net += e.deposit - e.payment;
+    } else {
+      groups.push({
+        date: e.tx.date,
+        entries: [e],
+        net: e.deposit - e.payment,
+      });
+    }
+  }
+  return groups;
+}

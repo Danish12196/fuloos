@@ -86,6 +86,12 @@ node --experimental-strip-types scripts/ledger/hash-model.ts path/to/ledger_web_
 
 Without the variable, SMS import works with the rules alone.
 
+### Learning from your categorisations
+
+Learning is off until you switch on "Learn from my categorisations" in the SMS import screen. With it on, each imported expense adds one row to `fuloos_ml_examples` (owner-only): the cleaned merchant text (letters only, no card numbers or digits), the payee and category you kept, the amount and what was suggested. The SMS text is never stored. Switching it off stops recording and stops using the log; "Delete learning data…" removes every row.
+
+Suggestions then come, in order, from your own corrections for the same merchant, a small personal model, the brand rules and the base model. The personal model is rebuilt in the browser from your log on top of whichever base model is loaded, so a new base model never discards your training. It is only used once you have 20 corrections in at least two categories, and only while it is at least as accurate as the plain mapping on your newest 20% of corrections. Your category mapping is saved to `fuloos_ml_settings`. In demo mode, or when those collections are missing, both stay in the browser session only.
+
 ## Checks
 
 ```sh

@@ -6,6 +6,7 @@ import {
   entryNotes,
   entryPayee,
   filterRegister,
+  groupByDay,
   sortRegister,
 } from "../src/register.ts";
 import type { Ledger, Transaction } from "../src/domain.ts";
@@ -131,4 +132,24 @@ test("sorts by columns with blanks last and newest-first ties", () => {
   assert.deepEqual(keys("payment", "desc"), ["a", "c", "b:in"]);
   assert.deepEqual(keys("payee", "asc"), ["b:in", "a", "c"]);
   assert.deepEqual(keys("payee", "desc"), ["a", "b:in", "c"]);
+});
+
+test("groupByDay splits sorted entries into dated runs with a daily net", () => {
+  const l: Ledger = {
+    ...ledger,
+    transactions: [
+      tx({ id: "a", date: "2026-11-02", amount: 1000 }),
+      tx({ id: "b", date: "2026-11-02", amount: 500, type: "income" }),
+      tx({ id: "c", date: "2026-11-01", amount: 200 }),
+    ],
+  };
+  const sorted = sortRegister(buildRegister(l, "card"), l, "date", "desc");
+  const groups = groupByDay(sorted);
+  assert.deepEqual(
+    groups.map((g) => [g.date, g.entries.length, g.net]),
+    [
+      ["2026-11-02", 2, -500],
+      ["2026-11-01", 1, -200],
+    ],
+  );
 });

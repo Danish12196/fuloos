@@ -14,6 +14,7 @@ import {
 import { shiftMonth } from "./domain";
 import {
   PERIOD_SPANS,
+  monthsBetween,
   periodContains,
   periodLabel,
   periodMonths,
@@ -29,6 +30,7 @@ import "./periodPicker.css";
  */
 export function PeriodPicker({
   month,
+  from,
   span = "month",
   spans,
   currentMonth,
@@ -38,23 +40,36 @@ export function PeriodPicker({
 }: {
   /** The last month in the period ("YYYY-MM"). */
   month: string;
+  /** First month of a custom range. */
+  from?: string;
   span?: PeriodSpan;
   /** Span choices to offer. Leave out for a month-only picker. */
   spans?: PeriodSpan[];
   currentMonth: string;
   /** Months that have activity; they get a small dot in the grid. */
   activeMonths?: Set<string>;
-  onChange: (next: { month: string; span: PeriodSpan }) => void;
+  onChange: (next: { month: string; span: PeriodSpan; from?: string }) => void;
   label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [year, setYear] = useState(Number(month.slice(0, 4)));
   const [hover, setHover] = useState<string | null>(null);
+  // Custom ranges take two clicks: the first month, then the last.
+  const [draftFrom, setDraftFrom] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const step = periodStep(span);
-  const range = periodMonths(span, month);
+  const custom = span === "custom";
+  const step = periodStep(span, month, from);
+  const range = periodMonths(span, month, from);
+  const title = periodLabel(span, month, from);
+  /** Move the whole period by `delta` months, keeping a custom range's length. */
+  const shift = (delta: number) =>
+    onChange({
+      span,
+      month: shiftMonth(month, delta),
+      from: custom && range ? shiftMonth(range.first, delta) : undefined,
+    });
   const choices = spans
     ? PERIOD_SPANS.filter((s) => spans.includes(s.value))
     : [];
@@ -62,6 +77,7 @@ export function PeriodPicker({
   useEffect(() => {
     if (!open) return;
     setYear(Number(month.slice(0, 4)));
+    setDraftFrom(null);
     const onPointer = (e: PointerEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -89,17 +105,44 @@ export function PeriodPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const pick = (next: string) => {
-    onChange({ month: next, span });
+  const close = () => {
     setOpen(false);
     trigger.current?.focus();
   };
-  // Which months light up while hovering: the period that would end there.
+  const pick = (next: string) => {
+    if (custom) {
+      if (!draftFrom) {
+        setDraftFrom(next);
+        return;
+      }
+      const [first, last] = [draftFrom, next].sort();
+      setDraftFrom(null);
+      onChange({ span, month: last, from: first });
+      close();
+      return;
+    }
+    onChange({ month: next, span });
+    close();
+  };
+  // What lights up while hovering: the period the click would choose.
   const preview = hover && span !== "all" ? hover : null;
-  const inBand = (m: string) =>
-    preview
-      ? periodContains(span, preview, m)
-      : !!range && periodContains(span, month, m);
+  const shown: { first: string; last: string } | null = (() => {
+    if (custom && draftFrom) {
+      const [first, last] = [draftFrom, preview ?? draftFrom].sort();
+      return { first, last };
+    }
+    if (custom) return range;
+    return preview ? periodMonths(span, preview) : range;
+  })();
+  const inBand = (m: string) => !!shown && m >= shown.first && m <= shown.last;
+  const ends = (m: string) =>
+    !!shown && (m === shown.first || m === shown.last);
+  const selected = (m: string) =>
+    custom
+      ? !draftFrom && !!range && (m === range.first || m === range.last)
+      : month === m && (!preview || preview === m);
+  const previewing = (m: string) =>
+    custom ? !!draftFrom && ends(m) : preview === m && preview !== month;
 
   function gridKeys(e: ReactKeyboardEvent<HTMLDivElement>) {
     const moves: Record<string, number> = {
@@ -131,7 +174,7 @@ export function PeriodPicker({
           className="period-step"
           aria-label={`Previous ${span === "month" ? "month" : "period"}`}
           disabled={!step}
-          onClick={() => onChange({ month: shiftMonth(month, -step), span })}
+          onClick={() => shift(-step)}
         >
           <ChevronLeft size={17} />
         </button>
@@ -142,13 +185,11 @@ export function PeriodPicker({
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? panelId : undefined}
-          aria-label={`${label}: ${periodLabel(span, month)}. Change`}
+          aria-label={`${label}: ${title}. Change`}
           onClick={() => setOpen((o) => !o)}
         >
           <CalendarDays size={16} aria-hidden />
-          <span className="period-trigger-text">
-            {periodLabel(span, month)}
-          </span>
+          <span className="period-trigger-text">{title}</span>
           <ChevronDown size={15} aria-hidden className="period-caret" />
         </button>
         <button
@@ -156,16 +197,16 @@ export function PeriodPicker({
           className="period-step"
           aria-label={`Next ${span === "month" ? "month" : "period"}`}
           disabled={!step}
-          onClick={() => onChange({ month: shiftMonth(month, step), span })}
+          onClick={() => shift(step)}
         >
           <ChevronRight size={17} />
         </button>
       </div>
-      {span !== "all" && !periodContains(span, month, currentMonth) && (
+      {span !== "all" && !periodContains(span, month, currentMonth, from) && (
         <button
           type="button"
           className="period-today"
-          onClick={() => onChange({ month: currentMonth, span })}
+          onClick={() => shift(monthsBetween(month, currentMonth) - 1)}
         >
           {span === "month" ? "This month" : "Back to now"}
         </button>
@@ -186,7 +227,15 @@ export function PeriodPicker({
                   className={`period-span${s.value === span ? " is-active" : ""}`}
                   aria-pressed={s.value === span}
                   title={s.long}
-                  onClick={() => onChange({ month, span: s.value })}
+                  onClick={() => {
+                    setDraftFrom(null);
+                    onChange({
+                      month,
+                      span: s.value,
+                      from:
+                        s.value === "custom" && range ? range.first : undefined,
+                    });
+                  }}
                 >
                   {s.short}
                 </button>
@@ -225,11 +274,9 @@ export function PeriodPicker({
               >
                 {Array.from({ length: 12 }, (_, i) => {
                   const m = `${year}-${String(i + 1).padStart(2, "0")}`;
-                  const anchor = (preview ?? month) === m;
                   const band = inBand(m);
-                  const range2 = periodMonths(span, preview ?? month);
-                  const edgeStart = band && range2?.first === m;
-                  const edgeEnd = band && range2?.last === m;
+                  const edgeStart = band && shown?.first === m;
+                  const edgeEnd = band && shown?.last === m;
                   return (
                     <button
                       key={m}
@@ -241,17 +288,17 @@ export function PeriodPicker({
                         edgeStart && "band-start",
                         edgeEnd && "band-end",
                         month === m && "is-anchor",
-                        month === m &&
-                          (!preview || preview === m) &&
-                          "is-selected",
+                        selected(m) && "is-selected",
                         m === currentMonth && "is-current",
                         m > currentMonth && "is-future",
-                        anchor && preview && preview !== month && "is-preview",
+                        previewing(m) && "is-preview",
                       ]
                         .filter(Boolean)
                         .join(" ")}
-                      aria-pressed={month === m}
-                      aria-label={`${periodLabel(span, m)}${m === currentMonth ? " (this month)" : ""}`}
+                      aria-pressed={
+                        !!range && periodContains(span, month, m, from)
+                      }
+                      aria-label={`${custom ? periodLabel("month", m) : periodLabel(span, m)}${m === currentMonth ? " (this month)" : ""}`}
                       tabIndex={
                         month === m ||
                         (month.slice(0, 4) !== String(year) && i === 0)
@@ -271,10 +318,18 @@ export function PeriodPicker({
                   );
                 })}
               </div>
-              {span !== "month" && (
-                <p className="period-hint">
-                  Pick the last month · {periodLabel(span, preview ?? month)}
+              {custom ? (
+                <p className="period-hint" aria-live="polite">
+                  {draftFrom
+                    ? `Now pick the last month · ${shown ? periodLabel("custom", shown.last, shown.first) : ""}`
+                    : "Pick the first month, then the last"}
                 </p>
+              ) : (
+                span !== "month" && (
+                  <p className="period-hint">
+                    Pick the last month · {periodLabel(span, preview ?? month)}
+                  </p>
+                )
               )}
             </>
           )}
