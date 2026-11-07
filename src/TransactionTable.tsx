@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from "react";
 import {
   ArrowDown,
+  ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUp,
   ChevronsUpDown,
   Pencil,
@@ -15,11 +17,13 @@ import {
   entryNotes,
   entryPayee,
   filterRegister,
+  groupByDay,
   sortRegister,
   type RegisterEntry,
   type SortDir,
   type SortKey,
 } from "./register";
+import { useDensity } from "./density";
 import "./transactionTable.css";
 
 const PAGE = 200;
@@ -27,6 +31,26 @@ const amountFormat = new Intl.NumberFormat("en-AE", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+const sortLabels: Record<SortKey, string> = {
+  date: "Date",
+  account: "Account",
+  payee: "Payee",
+  notes: "Notes",
+  category: "Category",
+  payment: "Payment",
+  deposit: "Deposit",
+  balance: "Balance",
+};
+const dayFormat = new Intl.DateTimeFormat("en-GB", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+function dayLabel(date: string) {
+  return dayFormat.format(new Date(date + "T00:00:00Z"));
+}
 
 export function TransactionsPanel({
   ledger,
@@ -78,6 +102,7 @@ export function TransactionsPanel({
   });
   const [limit, setLimit] = useState(PAGE);
   const [categorizing, setCategorizing] = useState<string | null>(null);
+  const [density] = useDensity();
 
   const account = ledger.accounts.find((a) => a.id === accountFilter);
   const register = useMemo(
@@ -210,6 +235,159 @@ export function TransactionsPanel({
     );
   };
 
+  const shown = rows.slice(0, limit);
+  const more = rows.length > limit && (
+    <div className="tx-more">
+      <span className="muted small">
+        Showing {limit} of {rows.length} rows
+      </span>
+      <button className="secondary" onClick={() => setLimit((l) => l + PAGE)}>
+        Show {Math.min(PAGE, rows.length - limit)} more
+      </button>
+    </div>
+  );
+  const signed = (v: number) =>
+    hidden ? "••••" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt(Math.abs(v))}`;
+  const card = (e: RegisterEntry) => {
+    const t = e.tx;
+    const label = t.payee || t.notes || "transaction";
+    const notes = entryNotes(e);
+    const isSelected = selected.has(t.id);
+    const category = e.direction
+      ? undefined
+      : ledger.categories.find((c) => c.id === t.category_id);
+    const accountName = ledger.accounts.find((a) => a.id === e.accountId)?.name;
+    const amount = e.deposit - e.payment;
+    const Icon = e.direction
+      ? ArrowLeftRight
+      : t.type === "income"
+        ? ArrowDownLeft
+        : ReceiptText;
+    return (
+      <li
+        key={e.key}
+        className={`tx-card ${isSelected ? "is-selected" : ""} ${e.direction ? "is-transfer" : ""}`}
+        onClick={() => !busy && onEdit(t)}
+      >
+        <span className="tx-card-check" onClick={(ev) => ev.stopPropagation()}>
+          <input
+            type="checkbox"
+            aria-label={`Select ${label} on ${t.date}`}
+            disabled={busy}
+            checked={isSelected}
+            onChange={() => toggleOne(t.id)}
+          />
+        </span>
+        <span
+          className={`tx-card-icon ${e.direction ? "transfer" : t.type}`}
+          style={
+            category
+              ? { background: category.color + "18", color: category.color }
+              : undefined
+          }
+          aria-hidden
+        >
+          {category?.emoji || <Icon size={19} />}
+        </span>
+        <span className="tx-card-main">
+          <b title={entryPayee(e, ledger)}>{entryPayee(e, ledger)}</b>
+          <span className="tx-card-meta">
+            {categoryCell(e)}
+            {showAccount && accountName && (
+              <span className="tx-card-account">{accountName}</span>
+            )}
+            {sort.key !== "date" && (
+              <span className="tx-card-date">
+                {t.date.slice(8, 10)}/{t.date.slice(5, 7)}/{t.date.slice(0, 4)}
+              </span>
+            )}
+          </span>
+          {notes && (
+            <small className="tx-card-notes" title={notes}>
+              {notes}
+            </small>
+          )}
+        </span>
+        <span className="tx-card-value">
+          <b className={amount > 0 ? "is-in" : ""}>{signed(amount)}</b>
+          <small className={e.balance < 0 ? "is-negative" : ""}>
+            {account ? "Balance" : "Total"} {fmt(e.balance)}
+          </small>
+        </span>
+        <span
+          className="tx-card-actions"
+          onClick={(ev) => ev.stopPropagation()}
+        >
+          <button
+            className="icon-button"
+            disabled={busy}
+            aria-label={`Edit ${label}`}
+            onClick={() => onEdit(t)}
+          >
+            <Pencil size={15} />
+          </button>
+          <button
+            className="icon-button delete"
+            disabled={busy}
+            aria-label={`Delete ${label}`}
+            onClick={() => onDelete(t)}
+          >
+            <Trash2 size={15} />
+          </button>
+        </span>
+      </li>
+    );
+  };
+  const relaxedView = (
+    <div className="tx-relaxed">
+      <div className="tx-relaxed-sort">
+        <label>
+          <span className="muted small">Sort by</span>
+          <select
+            aria-label="Sort transactions by"
+            value={sort.key}
+            onChange={(ev) => toggleSort(ev.target.value as SortKey)}
+          >
+            {(Object.keys(sortLabels) as SortKey[])
+              .filter((k) => k !== "account" || showAccount)
+              .map((k) => (
+                <option key={k} value={k}>
+                  {k === "balance" && !account
+                    ? "Total balance"
+                    : sortLabels[k]}
+                </option>
+              ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={
+            sort.dir === "asc" ? "Sorted ascending" : "Sorted descending"
+          }
+          title={sort.dir === "asc" ? "Ascending" : "Descending"}
+          onClick={() => toggleSort(sort.key)}
+        >
+          {sort.dir === "asc" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}
+        </button>
+      </div>
+      {sort.key === "date" ? (
+        groupByDay(shown).map((g) => (
+          <section className="tx-day" key={g.date + g.entries[0].key}>
+            <header className="tx-day-head">
+              <h3>{dayLabel(g.date)}</h3>
+              <span className={g.net > 0 ? "is-in" : ""}>{signed(g.net)}</span>
+            </header>
+            <ul className="tx-cards">{g.entries.map(card)}</ul>
+          </section>
+        ))
+      ) : (
+        <ul className="tx-cards tx-cards-flat">{shown.map(card)}</ul>
+      )}
+      {more}
+    </div>
+  );
+
   return (
     <section className="panel">
       <div className="filters">
@@ -328,7 +506,9 @@ export function TransactionsPanel({
           Clear selection
         </button>
       </div>
-      {rows.length ? (
+      {rows.length && density === "relaxed" ? (
+        relaxedView
+      ) : rows.length ? (
         <div className="tx-table-wrap">
           <table className={`tx-table ${showAccount ? "with-account" : ""}`}>
             <thead>
@@ -354,7 +534,7 @@ export function TransactionsPanel({
               </tr>
             </thead>
             <tbody>
-              {rows.slice(0, limit).map((e) => {
+              {shown.map((e) => {
                 const t = e.tx;
                 const label = t.payee || t.notes || "transaction";
                 const notes = entryNotes(e);
@@ -434,19 +614,7 @@ export function TransactionsPanel({
               })}
             </tbody>
           </table>
-          {rows.length > limit && (
-            <div className="tx-more">
-              <span className="muted small">
-                Showing {limit} of {rows.length} rows
-              </span>
-              <button
-                className="secondary"
-                onClick={() => setLimit((l) => l + PAGE)}
-              >
-                Show {Math.min(PAGE, rows.length - limit)} more
-              </button>
-            </div>
-          )}
+          {more}
         </div>
       ) : (
         <div className="empty">

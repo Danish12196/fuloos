@@ -41,9 +41,12 @@ import {
 } from "./recurring";
 import { ThemeToggle } from "./ThemeToggle";
 import { TransactionsPanel } from "./TransactionTable";
+import { SettingsDialog } from "./Settings";
+import { useDensity } from "./density";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  Settings as SettingsIcon,
   ArrowLeftRight,
   Plus,
   LayoutDashboard,
@@ -139,6 +142,8 @@ function App() {
     [month, setMonth] = useState(today().slice(0, 7)),
     [view, setView] = useState("month"),
     [hidden, setHidden] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [density] = useDensity();
   const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
@@ -1181,6 +1186,13 @@ function App() {
       (s, a) => s + balance(a, ledger.transactions),
       0,
     );
+  const categoryCounts = new Map<string, number>();
+  for (const t of ledger.transactions)
+    if (t.category_id)
+      categoryCounts.set(
+        t.category_id,
+        (categoryCounts.get(t.category_id) ?? 0) + 1,
+      );
   const spending = ledger.categories
     .map((c) => ({
       ...c,
@@ -1275,16 +1287,14 @@ function App() {
               {demo ? "Sample data · not saved" : "Personal workspace"}
             </small>
           </div>
-          {!demo && session && (
-            <button
-              className="icon-button"
-              aria-label="Delete my account"
-              title="Delete my account"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 size={18} />
-            </button>
-          )}
+          <button
+            className="icon-button"
+            aria-label="Settings"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <SettingsIcon size={18} />
+          </button>
           <button
             className="icon-button"
             aria-label="Sign out"
@@ -1301,6 +1311,19 @@ function App() {
           </button>
         </div>
       </aside>
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onDeleteAccount={
+            !demo && session
+              ? () => {
+                  setSettingsOpen(false);
+                  setDeleteOpen(true);
+                }
+              : undefined
+          }
+        />
+      )}
       {deleteOpen && backend && session && (
         <DeleteAccountDialog
           email={session.user.email}
@@ -1752,91 +1775,173 @@ function App() {
                   negative opening balance for amounts you owe.
                 </small>
               </div>
-              <div className="account-grid full">
-                {ledger.accounts.map((a) => (
-                  <article className="account-card" key={a.id}>
-                    <div className="account-top">
-                      <span
-                        className="account-symbol"
-                        style={{ background: a.color + "18", color: a.color }}
-                      >
-                        {a.emoji || <Wallet size={22} />}
-                      </span>
-                      <span className="account-kind">{types[a.type]}</span>
-                      <div className="row-actions">
+              {density === "compact" ? (
+                <section className="panel compact-list">
+                  <div className="compact-head accounts" aria-hidden>
+                    <span>Account</span>
+                    <span>Type</span>
+                    <span>Opening</span>
+                    <span className="num">Balance</span>
+                    <span />
+                  </div>
+                  {ledger.accounts.map((a) => {
+                    const value = balance(a, ledger.transactions);
+                    return (
+                      <div className="compact-row accounts" key={a.id}>
                         <button
-                          className="icon-button"
-                          aria-label={`Edit ${a.name}`}
-                          onClick={() => setModal({ kind: "account", item: a })}
+                          className="compact-name"
+                          onClick={() => {
+                            setPage("Transactions");
+                            setAccountFilter(a.id);
+                          }}
+                          title={`View ${a.name} transactions`}
                         >
-                          <Pencil size={15} />
+                          <span
+                            className="compact-symbol"
+                            style={{
+                              background: a.color + "18",
+                              color: a.color,
+                            }}
+                          >
+                            {a.emoji || <Wallet size={15} />}
+                          </span>
+                          <b>{a.name}</b>
                         </button>
-                        <button
-                          className="icon-button"
-                          disabled={busy}
-                          aria-label={`Delete ${a.name}`}
-                          onClick={() => setAccountToDelete(a)}
+                        <span className="muted">{types[a.type]}</span>
+                        <span className="muted">
+                          {concealed(a.opening_balance)} · {a.opening_date}
+                        </span>
+                        <strong
+                          className={`num ${value < 0 ? "is-negative" : ""}`}
                         >
-                          <Trash2 size={15} />
-                        </button>
+                          {concealed(value)}
+                        </strong>
+                        <span className="compact-actions">
+                          <button
+                            className="icon-button"
+                            aria-label={`Edit ${a.name}`}
+                            onClick={() =>
+                              setModal({ kind: "account", item: a })
+                            }
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            disabled={busy}
+                            aria-label={`Delete ${a.name}`}
+                            onClick={() => setAccountToDelete(a)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </span>
                       </div>
-                    </div>
-                    <h3>{a.name}</h3>
-                    <strong className="large-amount">
-                      {concealed(balance(a, ledger.transactions))}
-                    </strong>
-                    <p className="muted small">
-                      Opening: {concealed(a.opening_balance)} · {a.opening_date}
-                    </p>
-                    <button
-                      className="text-button"
-                      onClick={() => {
-                        setPage("Transactions");
-                        setAccountFilter(a.id);
-                      }}
-                    >
-                      View transactions <ArrowRight size={15} />
-                    </button>
-                  </article>
-                ))}
-                <button
-                  className="add-account-card"
-                  onClick={() => setModal({ kind: "account" })}
-                >
-                  <span>
-                    <Plus size={22} />
-                  </span>
-                  <b>Add an account</b>
-                  <small>Current, savings, credit card or cash</small>
-                </button>
-              </div>
+                    );
+                  })}
+                  {!ledger.accounts.length && (
+                    <Empty
+                      title="No accounts yet"
+                      text="Add a current, savings, credit card or cash account."
+                    />
+                  )}
+                </section>
+              ) : (
+                <div className="account-grid full">
+                  {ledger.accounts.map((a) => (
+                    <article className="account-card" key={a.id}>
+                      <div className="account-top">
+                        <span
+                          className="account-symbol"
+                          style={{ background: a.color + "18", color: a.color }}
+                        >
+                          {a.emoji || <Wallet size={22} />}
+                        </span>
+                        <span className="account-kind">{types[a.type]}</span>
+                        <div className="row-actions">
+                          <button
+                            className="icon-button"
+                            aria-label={`Edit ${a.name}`}
+                            onClick={() =>
+                              setModal({ kind: "account", item: a })
+                            }
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            disabled={busy}
+                            aria-label={`Delete ${a.name}`}
+                            onClick={() => setAccountToDelete(a)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                      <h3>{a.name}</h3>
+                      <strong className="large-amount">
+                        {concealed(balance(a, ledger.transactions))}
+                      </strong>
+                      <p className="muted small">
+                        Opening: {concealed(a.opening_balance)} ·{" "}
+                        {a.opening_date}
+                      </p>
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          setPage("Transactions");
+                          setAccountFilter(a.id);
+                        }}
+                      >
+                        View transactions <ArrowRight size={15} />
+                      </button>
+                    </article>
+                  ))}
+                  <button
+                    className="add-account-card"
+                    onClick={() => setModal({ kind: "account" })}
+                  >
+                    <span>
+                      <Plus size={22} />
+                    </span>
+                    <b>Add an account</b>
+                    <small>Current, savings, credit card or cash</small>
+                  </button>
+                </div>
+              )}
             </>
           )}
-          {page === "Categories" && (
-            <div className="category-grid">
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>All categories</h2>
-                  <span className="count">{ledger.categories.length}</span>
-                </div>
-                {ledger.categories.map((c) => (
-                  <div className="category-item" key={c.id}>
+          {page === "Categories" && density === "compact" && (
+            <section className="panel compact-list">
+              <div className="compact-head categories" aria-hidden>
+                <span>Category</span>
+                <span>Description</span>
+                <span className="num">Transactions</span>
+                <span />
+              </div>
+              {ledger.categories.map((c) => (
+                <div className="compact-row categories" key={c.id}>
+                  <span className="compact-name">
                     <span
-                      className="category-symbol"
+                      className="compact-symbol"
                       style={{ color: c.color, background: c.color + "18" }}
                     >
-                      {c.emoji || <Tags size={20} />}
+                      {c.emoji || <Tags size={15} />}
                     </span>
-                    <div>
-                      <b>{c.name}</b>
-                      <p>{c.description || "No description"}</p>
-                    </div>
+                    <b>{c.name}</b>
+                  </span>
+                  <span className="muted compact-text" title={c.description}>
+                    {c.description || "—"}
+                  </span>
+                  <span className="num muted">
+                    {categoryCounts.get(c.id) ?? 0}
+                  </span>
+                  <span className="compact-actions">
                     <button
                       className="icon-button"
                       aria-label={`Edit ${c.name}`}
                       onClick={() => setModal({ kind: "category", item: c })}
                     >
-                      <Pencil size={15} />
+                      <Pencil size={14} />
                     </button>
                     <button
                       className="icon-button"
@@ -1844,17 +1949,68 @@ function App() {
                       aria-label={`Delete ${c.name}`}
                       onClick={() => void remove("categories", c.id)}
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
+                  </span>
+                </div>
+              ))}
+              {!ledger.categories.length && (
+                <Empty
+                  title="Make it your own"
+                  text="Create categories that fit your life."
+                />
+              )}
+            </section>
+          )}
+          {page === "Categories" && density === "relaxed" && (
+            <div className="account-grid full category-cards">
+              {ledger.categories.map((c) => (
+                <article className="account-card" key={c.id}>
+                  <div className="account-top">
+                    <span
+                      className="account-symbol"
+                      style={{ background: c.color + "18", color: c.color }}
+                    >
+                      {c.emoji || <Tags size={20} />}
+                    </span>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        aria-label={`Edit ${c.name}`}
+                        onClick={() => setModal({ kind: "category", item: c })}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        disabled={busy}
+                        aria-label={`Delete ${c.name}`}
+                        onClick={() => void remove("categories", c.id)}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
-                ))}
-                {!ledger.categories.length && (
-                  <Empty
-                    title="Make it your own"
-                    text="Create categories that fit your life."
-                  />
-                )}
-              </section>
+                  <h3>{c.name}</h3>
+                  <p className="muted small category-card-text">
+                    {c.description || "No description"}
+                  </p>
+                  <span className="account-kind">
+                    {categoryCounts.get(c.id) ?? 0} transaction
+                    {categoryCounts.get(c.id) === 1 ? "" : "s"}
+                  </span>
+                </article>
+              ))}
+              <button
+                className="add-account-card"
+                onClick={() => setModal({ kind: "category" })}
+              >
+                <span>
+                  <Plus size={22} />
+                </span>
+                <b>Add a category</b>
+                <small>Groceries, rent, salary, anything</small>
+              </button>
             </div>
           )}
           {page === "Transactions" && (
