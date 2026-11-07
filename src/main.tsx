@@ -8,6 +8,12 @@ import { ConfirmHost } from "./ConfirmHost";
 import { confirmDialog } from "./dialogStore";
 import { DeleteMoneyAccountDialog } from "./DeleteMoneyAccount";
 import { applyAccountDeletion, planAccountDeletion } from "./accountDeletion";
+import { DeleteCategoriesDialog } from "./DeleteCategories";
+import {
+  applyCategoryDeletion,
+  planCategoryDeletion,
+  validateMoveTarget,
+} from "./categoryDeletion";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
 import { QueueDock, useLeaveWarning, useQueue } from "./QueueDock";
@@ -141,6 +147,12 @@ function App() {
     [hidden, setHidden] = useState(false);
   const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(
+    new Set(),
+  );
+  const [categoriesToDelete, setCategoriesToDelete] = useState<string[] | null>(
+    null,
+  );
   const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
   const [recurringModal, setRecurringModal] = useState<{
     open: true;
@@ -214,6 +226,8 @@ function App() {
   );
   useEffect(() => {
     setSelected(new Set());
+    setSelectedCategories(new Set());
+    setCategoriesToDelete(null);
     setBudgetModal(null);
     setBulkItems(null);
     setRecurringModal(null);
@@ -1069,6 +1083,105 @@ function App() {
     if (accountFilter === account.id) setAccountFilter("");
     setAccountToDelete(null);
   }
+  /**
+   * Deletes categories in the background queue. Their transactions and
+   * recurring schedules move to `target` (null = uncategorized) first, because
+   * the server refuses to delete a category that is still in use; their
+   * budgets are deleted with them by the server.
+   */
+  function deleteCategories(ids: string[], target: string | null) {
+    const first = planCategoryDeletion(ledger, ids);
+    if (!first.categoryIds.length) throw new Error("Nothing to delete.");
+    validateMoveTarget(ledger, first, target);
+    const done = () => {
+      const gone = new Set(first.categoryIds);
+      setSelectedCategories(
+        (old) => new Set([...old].filter((id) => !gone.has(id))),
+      );
+      setCategoriesToDelete(null);
+    };
+    if (demo) {
+      setLedger((l) =>
+        applyCategoryDeletion(l, planCategoryDeletion(l, ids), target),
+      );
+      done();
+      return;
+    }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    const n = first.categoryIds.length;
+    const total = first.transactionIds.length + first.recurringIds.length + n;
+    queue.enqueue({
+      label: `Delete ${n} ${n === 1 ? "category" : "categories"}`,
+      total,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        // Plan again when the task starts: earlier queued work may have
+        // added transactions to these categories since.
+        const plan = planCategoryDeletion(ledgerRef.current, ids);
+        if (!plan.categoryIds.length) return;
+        validateMoveTarget(ledgerRef.current, plan, target);
+        let saved = 0;
+        try {
+          const moved = plan.transactionIds
+            .map((id) => latestTransaction(id))
+            .filter((t): t is Transaction => !!t)
+            .map((t) => ({ ...t, category_id: target }));
+          if (moved.length)
+            await api.updateTransactions(
+              moved,
+              (count, records) => {
+                if (!stillOwner()) return;
+                updateTransactions(records);
+                ctx.progress(Math.min(total, count));
+              },
+              stillOwner,
+            );
+          saved = moved.length;
+          for (const id of plan.recurringIds) {
+            checkOwner(stillOwner);
+            const schedule = (ledgerRef.current.recurring ?? []).find(
+              (r) => r.id === id,
+            );
+            if (!schedule) continue;
+            const { id: _id, ...value } = schedule;
+            const record = await api.save(
+              "recurring",
+              { ...value, category_id: target },
+              id,
+            );
+            if (!stillOwner()) return;
+            setLedger((l) => ({
+              ...l,
+              recurring: (l.recurring ?? []).map((r) =>
+                r.id === id ? record : r,
+              ),
+            }));
+            ctx.progress(Math.min(total, ++saved));
+          }
+          checkOwner(stillOwner);
+          await api.removeMany("categories", plan.categoryIds, (deleted) => {
+            if (!stillOwner()) return;
+            const gone = new Set(deleted);
+            setLedger((l) => ({
+              ...l,
+              categories: l.categories.filter((c) => !gone.has(c.id)),
+              budgets: (l.budgets ?? []).filter(
+                (b) => !gone.has(b.category_id),
+              ),
+            }));
+            saved += deleted.length;
+            ctx.progress(Math.min(total, saved));
+          });
+        } catch (e) {
+          if (stillOwner()) await load();
+          throw e;
+        }
+      },
+    });
+    done();
+  }
   async function remove(
     table: "categories" | "transactions" | "recurring" | "budgets",
     id: string,
@@ -1324,6 +1437,19 @@ function App() {
           plan={planAccountDeletion(ledger, accountToDelete.id)}
           onClose={() => setAccountToDelete(null)}
           onDelete={(progress) => deleteMoneyAccount(accountToDelete, progress)}
+        />
+      )}
+      {categoriesToDelete && (
+        <DeleteCategoriesDialog
+          categories={ledger.categories.filter((c) =>
+            categoriesToDelete.includes(c.id),
+          )}
+          plan={planCategoryDeletion(ledger, categoriesToDelete)}
+          remaining={ledger.categories.filter(
+            (c) => !categoriesToDelete.includes(c.id),
+          )}
+          onClose={() => setCategoriesToDelete(null)}
+          onDelete={(target) => deleteCategories(categoriesToDelete, target)}
         />
       )}
       <main>
@@ -1819,8 +1945,83 @@ function App() {
                   <h2>All categories</h2>
                   <span className="count">{ledger.categories.length}</span>
                 </div>
+                {ledger.categories.length > 0 && (
+                  <div className="bulk-toolbar category-toolbar">
+                    <label className="selection-label">
+                      <input
+                        type="checkbox"
+                        disabled={busy}
+                        checked={
+                          selectedCategories.size > 0 &&
+                          ledger.categories.every((c) =>
+                            selectedCategories.has(c.id),
+                          )
+                        }
+                        ref={(el) => {
+                          if (el)
+                            el.indeterminate =
+                              selectedCategories.size > 0 &&
+                              !ledger.categories.every((c) =>
+                                selectedCategories.has(c.id),
+                              );
+                        }}
+                        onChange={(e) =>
+                          setSelectedCategories(
+                            e.target.checked
+                              ? new Set(ledger.categories.map((c) => c.id))
+                              : new Set(),
+                          )
+                        }
+                      />
+                      Select all
+                    </label>
+                    <span className="muted small">
+                      {selectedCategories.size} selected
+                    </span>
+                    <button
+                      className="secondary danger-outline"
+                      disabled={busy || !selectedCategories.size}
+                      onClick={() =>
+                        setCategoriesToDelete(
+                          ledger.categories
+                            .filter((c) => selectedCategories.has(c.id))
+                            .map((c) => c.id),
+                        )
+                      }
+                    >
+                      <Trash2 size={15} /> Delete selected
+                    </button>
+                    {selectedCategories.size > 0 && (
+                      <button
+                        className="text-button"
+                        disabled={busy}
+                        onClick={() => setSelectedCategories(new Set())}
+                      >
+                        Clear selection
+                      </button>
+                    )}
+                  </div>
+                )}
                 {ledger.categories.map((c) => (
-                  <div className="category-item" key={c.id}>
+                  <div
+                    className={`category-item ${selectedCategories.has(c.id) ? "is-selected" : ""}`}
+                    key={c.id}
+                  >
+                    <input
+                      type="checkbox"
+                      className="transaction-select category-select"
+                      aria-label={`Select ${c.name}`}
+                      disabled={busy}
+                      checked={selectedCategories.has(c.id)}
+                      onChange={() =>
+                        setSelectedCategories((old) => {
+                          const next = new Set(old);
+                          if (next.has(c.id)) next.delete(c.id);
+                          else next.add(c.id);
+                          return next;
+                        })
+                      }
+                    />
                     <span
                       className="category-symbol"
                       style={{ color: c.color, background: c.color + "18" }}
@@ -1842,7 +2043,7 @@ function App() {
                       className="icon-button"
                       disabled={busy}
                       aria-label={`Delete ${c.name}`}
-                      onClick={() => void remove("categories", c.id)}
+                      onClick={() => setCategoriesToDelete([c.id])}
                     >
                       <Trash2 size={15} />
                     </button>
