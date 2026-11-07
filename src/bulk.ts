@@ -7,6 +7,7 @@ import {
 
 export interface BulkChanges {
   type?: Kind;
+  amount?: number;
   account_id?: string;
   to_account_id?: string;
   category_id?: string | null;
@@ -65,4 +66,31 @@ export function rebaseEdit<T extends object>(
   for (const key of Object.keys(edited) as (keyof T)[])
     if (edited[key] !== original[key]) next[key] = edited[key];
   return next;
+}
+
+export type SharedFields = Partial<Omit<Transaction, "id">>;
+
+/**
+ * The values every given transaction has in common. A field is present only
+ * when all rows agree on it; a missing key means the rows differ ("mixed").
+ */
+export function sharedFields(items: Transaction[]): SharedFields {
+  const shared: SharedFields = {};
+  if (!items.length) return shared;
+  const keys = [
+    "type",
+    "amount",
+    "account_id",
+    "to_account_id",
+    "category_id",
+    "date",
+    "payee",
+    "notes",
+  ] as const;
+  for (const key of keys) {
+    const first = items[0][key];
+    if (items.every((t) => t[key] === first))
+      Object.assign(shared, { [key]: first });
+  }
+  return shared;
 }

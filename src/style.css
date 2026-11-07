@@ -2207,22 +2207,31 @@ button {
   background: var(--active-surface);
 }
 .bulk-fields {
-  display: grid;
-  gap: 16px;
   border: 0;
   padding: 0;
+  margin: 0;
   min-width: 0;
 }
-.bulk-preview-row {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere;
+.bulk-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
 }
-.bulk-preview-row p {
-  white-space: pre-wrap;
+.bulk-keep {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand);
+  cursor: pointer;
 }
-.bulk-modal {
-  width: min(760px, calc(100vw - 32px));
+.bulk-keep:hover {
+  text-decoration: underline;
+}
+.bulk-modal .import-progress {
+  margin-bottom: 6px;
 }
 
 .csv-presets {

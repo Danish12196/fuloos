@@ -135,3 +135,24 @@ test("rebaseEdit keeps earlier queued changes to other fields", async () => {
     payee: "Shop",
   });
 });
+
+test("sharedFields reports only values every row has in common", async () => {
+  const { sharedFields } = await import("../src/bulk.ts");
+  const other = { ...income, id: "two", amount: 900, notes: "Other" };
+  const shared = sharedFields([income, other]);
+  assert.equal(shared.type, "income");
+  assert.equal(shared.account_id, "bank");
+  assert.equal(shared.to_account_id, null);
+  assert.ok("to_account_id" in shared);
+  assert.ok(!("amount" in shared));
+  assert.ok(!("notes" in shared));
+  assert.deepEqual(sharedFields([]), {});
+});
+
+test("bulk edits can set one amount on every row", () => {
+  assert.equal(editTransaction(income, { amount: 5000 }, ledger).amount, 5000);
+  assert.throws(
+    () => editTransaction(income, { amount: -1 }, ledger),
+    /Amount must be/,
+  );
+});
