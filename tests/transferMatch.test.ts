@@ -247,3 +247,14 @@ test("credit card accounts are hinted by card payment wording", () => {
   assert.equal(m.otherAccount, "card");
   assert.equal(m.confidence, "likely");
 });
+
+test("a row already imported as an expense is left a duplicate, not turned into a transfer", () => {
+  const ledger = base();
+  ledger.transactions.push(
+    tx({ id: "old", amount: 50000, payee: "Nest Saver" }),
+  );
+  const rows = [["2026-03-01", "Nest Saver", "", "-500"]];
+  const preview = previewCsv(rows, options("chk"), ledger);
+  assert.equal(preview[0].duplicate, true);
+  assert.deepEqual(findTransferMatches(preview, "chk", ledger), []);
+});

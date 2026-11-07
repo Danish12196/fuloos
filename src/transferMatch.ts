@@ -35,6 +35,8 @@ export interface TransferMatch {
 export interface MatchableRow {
   index: number;
   transaction: ImportTransaction | null;
+  /** Already in the ledger as it is; such rows are never re-classified. */
+  duplicate?: boolean;
 }
 
 /** Legs of one transfer can post a few days apart (weekends, card cycles). */
@@ -145,6 +147,7 @@ export function findTransferMatches(
     else byAmount.set(t.amount, [t]);
   }
 
+  rows = rows.filter((r) => !r.duplicate);
   const candidates: Candidate[] = [];
   const named: TransferMatch[] = [];
   for (const { index, transaction: row } of rows) {
