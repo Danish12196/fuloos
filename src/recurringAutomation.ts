@@ -1066,7 +1066,6 @@ export function detectRecurringPatterns(
       const lastAccount = memberTxs[memberTxs.length - 1].account_id;
       const horizon = accountHorizon.get(lastAccount) ?? asOfDate;
       const ended = seriesHasEnded(stats.lastDate, frequency, horizon < asOfDate ? horizon : asOfDate);
-      if (ended && !includeEnded) continue;
       const needed = ended ? minima.ended : minima.active;
       if (stats.count < needed) continue;
 
@@ -1216,10 +1215,18 @@ export function detectRecurringPatterns(
       ) {
         runStart--;
       }
-      const run = chain.members.slice(runStart);
+      let run = chain.members.slice(runStart);
       const runDays = run.map((m) => parseIsoDate(m.item.date)?.day ?? 1);
-      const anchorDay = medianOf(runDays);
+      let anchorDay = medianOf(runDays);
+      // Keep an established month-end billing day even when the latest run
+      // is short or starts in a short month.
+      const allDays = chain.members.map((m) => parseIsoDate(m.item.date)?.day ?? 1);
+      const fullAnchor = medianOf(allDays);
+      if (frequency !== "weekly" && fullAnchor >= 29 && fullAnchor > anchorDay) {
+        anchorDay = fullAnchor;
+      }
       let scheduleStartDate = run[0].item.date;
+      let runBaseStep = run[0].step;
       if (frequency !== "weekly") {
         const first = parseIsoDate(run[0].item.date)!;
         const candidatesForStart = [-1, 0, 1].map((shift) => {
@@ -1234,8 +1241,28 @@ export function detectRecurringPatterns(
             ? d
             : best,
         );
+        // A start date clamped to a short month (Feb 28 for the 31st) would
+        // pull every later due date back, so start at the first cycle whose
+        // month holds the anchor day. Payments before it stay unlinked.
+        const parsedStart = parseIsoDate(scheduleStartDate)!;
+        if (parsedStart.day < anchorDay) {
+          const monthsPerStep =
+            frequency === "monthly" ? 1 : frequency === "quarterly" ? 3 : 12;
+          for (let k = 1; k <= 12; k++) {
+            const total =
+              parsedStart.year * 12 + (parsedStart.month - 1) + k * monthsPerStep;
+            const y = Math.floor(total / 12);
+            const mo = (total % 12) + 1;
+            if (daysInMonth(y, mo) < anchorDay) continue;
+            const remaining = run.filter((m) => m.step - run[0].step >= k);
+            if (!remaining.length && ended) break;
+            scheduleStartDate = formatIsoDate(y, mo, anchorDay);
+            runBaseStep = run[0].step + k;
+            run = remaining;
+            break;
+          }
+        }
       }
-      const runBaseStep = run[0].step;
       const historicalLinks = run.map((m) => ({
         occurrence_date: occurrenceAtStep(
           scheduleStartDate,
@@ -1244,8 +1271,10 @@ export function detectRecurringPatterns(
         ),
         transaction_id: m.item.id,
       }));
-      const lastOccurrence = historicalLinks[historicalLinks.length - 1].occurrence_date;
-      const lastStep = run[run.length - 1].step - runBaseStep;
+      const lastOccurrence = historicalLinks.length
+        ? historicalLinks[historicalLinks.length - 1].occurrence_date
+        : scheduleStartDate;
+      const lastStep = run.length ? run[run.length - 1].step - runBaseStep : -1;
       const nextStepDate = occurrenceAtStep(scheduleStartDate, frequency, lastStep + 1);
       const nextExpectedDate =
         ended || nextStepDate >= asOfDate
@@ -1321,7 +1350,12 @@ export function detectRecurringPatterns(
     }
   }
 
-  return results.sort(
+  // Ended series are filtered only here, after they have claimed their
+  // payments, so leaving them out never turns those payments into other
+  // (wrong) suggestions.
+  return results
+    .filter((p) => includeEnded || p.status === "active")
+    .sort(
     (a, b) =>
       (a.status === b.status ? 0 : a.status === "active" ? -1 : 1) ||
       b.confidence - a.confidence ||

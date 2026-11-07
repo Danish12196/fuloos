@@ -362,3 +362,36 @@ test("reconcile matches a payment that only has notes", () => {
   const result = reconcileTransactions(ledger, { asOfDate: "2026-08-20" });
   assert.equal(result.autoLinks.length + result.reviewCandidates.length, 1);
 });
+
+test("leaving ended series out does not turn their payments into other suggestions", () => {
+  const txs: Transaction[] = [];
+  for (let i = 0; i < 12; i++) {
+    txs.push(tx(monthDate(2025, 1 + i, 10), 3900, "Streamly", "Monthly plan"));
+  }
+  txs.push(filler("2026-03-15"));
+  const ledger = ledgerWith(txs);
+  const all = detectRecurringPatterns(ledger, { asOfDate: "2026-03-20" });
+  assert.equal(all.length, 1);
+  assert.equal(all[0].status, "ended");
+  const activeOnly = detectRecurringPatterns(ledger, {
+    asOfDate: "2026-03-20",
+    includeEnded: false,
+  });
+  assert.equal(activeOnly.length, 0);
+});
+
+test("keeps a month-end billing day when the latest run starts in February", () => {
+  const txs = [
+    tx("2025-10-31", 4500, "Streamly", "Monthly plan"),
+    tx("2025-11-30", 4500, "Streamly", "Monthly plan"),
+    tx("2025-12-31", 4500, "Streamly", "Monthly plan"),
+    tx("2026-02-28", 4500, "Streamly", "Monthly plan"),
+  ];
+  const patterns = detectRecurringPatterns(ledgerWith(txs), {
+    asOfDate: "2026-03-05",
+  });
+  assert.equal(patterns.length, 1);
+  const p = patterns[0];
+  assert.equal(p.draftSchedule.start_date, "2026-03-31");
+  assert.equal(p.nextExpectedDate, "2026-03-31");
+});
