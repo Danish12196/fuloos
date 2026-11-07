@@ -1,4 +1,5 @@
 import { ImportProgress } from "./ImportProgress";
+import { confirmDialog } from "./dialogStore";
 import { ColorPicker, EmojiField } from "./Appearance";
 import type { Category } from "./domain";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -312,10 +313,13 @@ export function CsvImport({
   async function handleDeletePreset() {
     if (!activePreset || presetBusy) return;
     const targetName = activePreset.name;
-    if (
-      !window.confirm(`Delete preset "${targetName}"? This cannot be undone.`)
-    )
-      return;
+    const ok = await confirmDialog({
+      title: `Delete preset "${targetName}"?`,
+      message: "This cannot be undone.",
+      confirmLabel: "Delete preset",
+      tone: "danger",
+    });
+    if (!ok) return;
     setPresetBusy(true);
     try {
       setPresets(await presetStore.remove(targetName));
