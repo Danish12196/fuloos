@@ -2188,19 +2188,42 @@ button {
   padding: 16px 22px;
   border-bottom: 1px solid var(--line);
 }
-.selection-label { display: flex; align-items: center; gap: 8px; }
-.selection-label input[type="checkbox"], .transaction-select {
+.selection-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.selection-label input[type="checkbox"],
+.transaction-select {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
   accent-color: var(--green);
 }
-.transaction-select { margin: 0 12px 0 16px; }
-.transaction-row.is-selected { background: var(--active-surface); }
-.bulk-fields { display: grid; gap: 16px; border: 0; padding: 0; min-width: 0; }
-.bulk-preview-row { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.bulk-preview-row p { white-space: pre-wrap; }
-.bulk-modal { width: min(760px, calc(100vw - 32px)); }
+.transaction-select {
+  margin: 0 12px 0 16px;
+}
+.transaction-row.is-selected {
+  background: var(--active-surface);
+}
+.bulk-fields {
+  display: grid;
+  gap: 16px;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.bulk-preview-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.bulk-preview-row p {
+  white-space: pre-wrap;
+}
+.bulk-modal {
+  width: min(760px, calc(100vw - 32px));
+}
 
 .csv-presets {
   padding: 16px;
@@ -2826,7 +2849,9 @@ button {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .suggestion-card:hover {
   border-color: #b8cfb2;
@@ -3413,4 +3438,32 @@ button {
 }
 :root[data-theme="dark"] .primary.danger:hover {
   background: #8f4339;
+}
+
+/* Typed confirmation for deleting a money account (built on the shared confirm dialog). */
+.typed-confirm {
+  width: 440px;
+}
+.typed-confirm form {
+  text-align: left;
+}
+.typed-confirm .typed-confirm-warning {
+  margin-top: 12px;
+  color: #9e493e;
+  font-weight: 600;
+  text-align: center;
+}
+.typed-confirm #delete-money-account-message p:not(.typed-confirm-warning) {
+  margin-top: 6px;
+  text-align: center;
+}
+.typed-confirm label {
+  margin-top: 18px;
+}
+.confirm-phrase {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: all;
+}
+:root[data-theme="dark"] .typed-confirm .typed-confirm-warning {
+  color: #f0a597;
 }

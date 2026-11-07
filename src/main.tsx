@@ -6,6 +6,8 @@ import { backend, createPresetStore, type Session } from "./client";
 import { DeleteAccountDialog } from "./DeleteAccount";
 import { ConfirmHost } from "./ConfirmHost";
 import { confirmDialog } from "./dialogStore";
+import { DeleteMoneyAccountDialog } from "./DeleteMoneyAccount";
+import { applyAccountDeletion, planAccountDeletion } from "./accountDeletion";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
 import {
@@ -125,6 +127,7 @@ function App() {
     [modal, setModal] = useState<Modal>(null),
     [importOpen, setImportOpen] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
+    [accountToDelete, setAccountToDelete] = useState<Account | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false),
@@ -919,20 +922,57 @@ function App() {
       setBusy(false);
     }
   }
+  /** Deletes a money account with its recurring schedules and every transaction touching it. */
+  async function deleteMoneyAccount(
+    account: Account,
+    progress: (step: string) => void,
+  ) {
+    const plan = planAccountDeletion(ledger, account.id);
+    setError("");
+    if (demo) {
+      setLedger((l) => applyAccountDeletion(l, account.id, plan));
+    } else {
+      if (!backend || !session) throw new Error("Please sign in.");
+      const current = generation.current;
+      const total = plan.transactionIds.length;
+      try {
+        if (plan.recurringIds.length) {
+          progress("Deleting recurring schedules…");
+          await backend.removeMany("recurring", plan.recurringIds);
+        }
+        let done = 0;
+        if (total) progress(`Deleting transactions (0 of ${total})…`);
+        await backend.removeMany("transactions", plan.transactionIds, (ids) => {
+          done += ids.length;
+          progress(`Deleting transactions (${done} of ${total})…`);
+        });
+        progress("Deleting the account…");
+        await backend.remove("accounts", account.id);
+      } catch (e) {
+        // Some records may already be gone; show what is left on the server.
+        if (current === generation.current) void load();
+        throw e;
+      }
+      if (current !== generation.current) return;
+      setLedger((l) => applyAccountDeletion(l, account.id, plan));
+    }
+    const removed = new Set(plan.transactionIds);
+    setSelected((old) => new Set([...old].filter((v) => !removed.has(v))));
+    if (accountFilter === account.id) setAccountFilter("");
+    setAccountToDelete(null);
+  }
   async function remove(
-    table: "accounts" | "categories" | "transactions" | "recurring" | "budgets",
+    table: "categories" | "transactions" | "recurring" | "budgets",
     id: string,
   ) {
     const noun =
-      table === "accounts"
-        ? "account"
-        : table === "categories"
-          ? "category"
-          : table === "transactions"
-            ? "transaction"
-            : table === "recurring"
-              ? "recurring schedule"
-              : "budget";
+      table === "categories"
+        ? "category"
+        : table === "transactions"
+          ? "transaction"
+          : table === "recurring"
+            ? "recurring schedule"
+            : "budget";
     const message =
       table === "recurring"
         ? "Past recorded transactions will stay in your ledger."
@@ -952,18 +992,6 @@ function App() {
     setBusy(true);
     setError("");
     try {
-      if (table === "accounts") {
-        if (
-          ledger.transactions.some(
-            (t) => t.account_id === id || t.to_account_id === id,
-          )
-        )
-          throw new Error("Delete or move this account’s transactions first.");
-        if ((ledger.recurring ?? []).some((r) => r.account_id === id))
-          throw new Error(
-            "Delete or reassign this account’s recurring schedules first.",
-          );
-      }
       if (table === "categories") {
         if (ledger.transactions.some((t) => t.category_id === id))
           throw new Error("Reassign this category’s transactions first.");
@@ -1004,10 +1032,7 @@ function App() {
             ),
           };
         }
-        return {
-          ...l,
-          [table]: l[table].filter((v) => v.id !== id),
-        } as Ledger;
+        return l;
       };
       if (demo) setLedger(applyRemoval);
       else {
@@ -1183,6 +1208,14 @@ function App() {
             setDeleteOpen(false);
             setLedger(emptyLedger);
           }}
+        />
+      )}
+      {accountToDelete && (
+        <DeleteMoneyAccountDialog
+          account={accountToDelete}
+          plan={planAccountDeletion(ledger, accountToDelete.id)}
+          onClose={() => setAccountToDelete(null)}
+          onDelete={(progress) => deleteMoneyAccount(accountToDelete, progress)}
         />
       )}
       <main>
@@ -1657,7 +1690,7 @@ function App() {
                           className="icon-button"
                           disabled={busy}
                           aria-label={`Delete ${a.name}`}
-                          onClick={() => void remove("accounts", a.id)}
+                          onClick={() => setAccountToDelete(a)}
                         >
                           <Trash2 size={15} />
                         </button>
