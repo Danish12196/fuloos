@@ -17,6 +17,7 @@ import {
   type PlainModel,
 } from "../src/ledger/model.ts";
 import { guessMap } from "../src/ledger/mapping.ts";
+import { suggestCategory } from "../src/ledger/learning.ts";
 import {
   previewSms,
   displayPayee,
@@ -222,8 +223,7 @@ test("SMS preview builds reviewable transactions", () => {
     ),
     { account: "a", fallbackDate: "2025-06-01" },
     ledger,
-    null,
-    { Food_Dining: "food" },
+    (m, a) => suggestCategory(null, null, { Food_Dining: "food" }, m, a),
   );
   const [talabat, carrefour, otp, usd, salary, repeat] = rows;
   assert.deepEqual(talabat.transaction, {
@@ -285,8 +285,7 @@ test("duplicates follow edits and repeated SMS on different days are kept", () =
     ],
     { account: "a", fallbackDate: "2025-06-01" },
     ledger,
-    null,
-    {},
+    (m, a) => suggestCategory(null, null, {}, m, a),
   );
   assert.equal(rows[0].duplicate, false);
   assert.equal(rows[1].duplicate, false);

@@ -2,7 +2,12 @@ import { BulkEdit } from "./BulkEdit";
 import { ColorPicker, EmojiField } from "./Appearance";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { backend, createPresetStore, type Session } from "./client";
+import {
+  backend,
+  createLearningStore,
+  createPresetStore,
+  type Session,
+} from "./client";
 import { DeleteAccountDialog } from "./DeleteAccount";
 import { ConfirmHost } from "./ConfirmHost";
 import { confirmDialog } from "./dialogStore";
@@ -221,6 +226,10 @@ function App() {
       return { ...l, [table]: [...kept, ...byId.values()] } as Ledger;
     });
   }
+  const learningStore = useMemo(
+    () => createLearningStore(!demo && !!session),
+    [demo, session?.user.id],
+  );
   const presetStore = useMemo(
     () => createPresetStore(!demo && !!session),
     [demo, session?.user.id],
@@ -941,6 +950,8 @@ function App() {
     rows: ImportTransaction[],
     progress: (n: number) => void,
     source = "Import",
+    /** Called with how many rows (in order) are confirmed saved; may run after the caller has closed. */
+    onSaved?: (n: number) => void,
   ) {
     rows.forEach((row) => validateTransaction(row, ledger));
     if (demo) {
@@ -952,6 +963,7 @@ function App() {
         ],
       }));
       progress(rows.length);
+      onSaved?.(rows.length);
       return;
     }
     if (!backend || !session) throw new Error("Please sign in.");
@@ -970,6 +982,7 @@ function App() {
               if (!stillOwner()) return;
               mergeRecords("transactions", records);
               ctx.progress(saved);
+              onSaved?.(saved);
             },
             stillOwner,
           );
@@ -2116,9 +2129,10 @@ function App() {
         <SmsImport
           ledger={ledger}
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
+          learning={learningStore}
           onClose={() => setSmsOpen(false)}
-          onImport={(rows, progress) =>
-            importTransactions(rows, progress, "SMS import:")
+          onImport={(rows, progress, onSaved) =>
+            importTransactions(rows, progress, "SMS import:", onSaved)
           }
         />
       )}
