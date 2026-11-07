@@ -12,6 +12,8 @@ Read-only probes of `https://pb.danishali.dev` on 7 November 2026:
 - Batch requests are enabled.
 - **`fuloos_recurring`, `fuloos_recurring_occurrences` and `fuloos_recurring_prefs` are missing.** Migrations `1793881800_recurring.js` and `1793968200_recurring_automation.js` have not been applied. The app still signs in and loads (recurring data loads as empty), but creating schedules, confirming payments and saving automation preferences fail until they are installed.
 
+The same flow was run on 7 November 2026 against local PocketBase v0.40.6 instances (all four migrations, and only the first two to mirror production) using the app's own `PocketBaseBackend`: sign-up, stored session, session restore, empty ledger load, account create/delete, sign-out, wrong password and duplicate email all behaved correctly. With only the first two migrations, the ledger still loads and only recurring saves fail.
+
 No user was created on the production server. To verify sign-up and sign-in end to end, run the smoke test with a throwaway email. It uses the app's own `PocketBaseBackend`, checks every collection, signs up/in, restores the session in a fresh instance, loads the ledger, creates and deletes one account, signs out and confirms a wrong password is rejected:
 
 ```sh

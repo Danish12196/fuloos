@@ -449,7 +449,7 @@ test("PocketBase load fetches all 6 collections, normalizes relations, recurring
       items: [
         {
           id: "pref1",
-          auto_detect: 'on',
+          auto_detect: "on",
           auto_match: "auto",
           dismissed_keys: JSON.stringify(["rec1:2026-01-01:tx1"]),
         },
@@ -467,9 +467,11 @@ test("PocketBase load fetches all 6 collections, normalizes relations, recurring
   assert.equal(ledger.recurring?.length, 1);
   assert.equal(ledger.recurring_occurrences?.length, 1);
   assert.equal(ledger.recurring_prefs?.id, "pref1");
-  assert.equal(ledger.recurring_prefs?.auto_detect, 'on');
+  assert.equal(ledger.recurring_prefs?.auto_detect, "on");
   assert.equal(ledger.recurring_prefs?.auto_match, "auto");
-  assert.deepEqual(ledger.recurring_prefs?.dismissed_keys, ["rec1:2026-01-01:tx1"]);
+  assert.deepEqual(ledger.recurring_prefs?.dismissed_keys, [
+    "rec1:2026-01-01:tx1",
+  ]);
 
   // Transactions normalization: "" -> null
   assert.equal(ledger.transactions[0].to_account_id, null);
@@ -494,7 +496,9 @@ test("PocketBase load fetches all 6 collections, normalizes relations, recurring
   assert.ok(paths.some((p) => p.includes("/fuloos_categories/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_transactions/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring/records")));
-  assert.ok(paths.some((p) => p.includes("/fuloos_recurring_occurrences/records")));
+  assert.ok(
+    paths.some((p) => p.includes("/fuloos_recurring_occurrences/records")),
+  );
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring_prefs/records")));
 });
 
@@ -665,13 +669,13 @@ test("PocketBase recurring_prefs saves serialize dismissed_keys and normalize fi
     json(auth),
     json({
       id: "pref-new",
-      auto_detect: 'off',
+      auto_detect: "off",
       auto_match: "manual",
       dismissed_keys: '["k1","k2"]',
     }),
     json({
       id: "pref-new",
-      auto_detect: 'on',
+      auto_detect: "on",
       auto_match: "auto",
       dismissed_keys: '["k1"]',
     }),
@@ -680,7 +684,7 @@ test("PocketBase recurring_prefs saves serialize dismissed_keys and normalize fi
   await f.backend.signIn("test@example.test", "test-only-password");
 
   const created = await f.backend.save("recurring_prefs", {
-    auto_detect: 'off',
+    auto_detect: "off",
     auto_match: "manual",
     dismissed_keys: ["k1", "k2"],
   });
@@ -693,7 +697,7 @@ test("PocketBase recurring_prefs saves serialize dismissed_keys and normalize fi
   );
   const createBody = JSON.parse(String(createCall.init.body));
   assert.equal(createBody.user_id, "user-a");
-  assert.equal(createBody.auto_detect, 'off');
+  assert.equal(createBody.auto_detect, "off");
   assert.equal(createBody.auto_match, "manual");
   assert.equal(createBody.dismissed_keys, '["k1","k2"]');
   assert.deepEqual(created.dismissed_keys, ["k1", "k2"]);
@@ -701,7 +705,7 @@ test("PocketBase recurring_prefs saves serialize dismissed_keys and normalize fi
   const updated = await f.backend.save(
     "recurring_prefs",
     {
-      auto_detect: 'on',
+      auto_detect: "on",
       auto_match: "auto",
       dismissed_keys: ["k1"],
     },
@@ -731,7 +735,7 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
   assert.deepEqual(ledger.recurring, []);
   assert.deepEqual(ledger.recurring_occurrences, []);
   assert.deepEqual(ledger.recurring_prefs, {
-    auto_detect: 'on',
+    auto_detect: "on",
     auto_match: "auto",
     dismissed_keys: [],
   });
@@ -745,5 +749,77 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
   );
-  await assert.rejects(() => f.backend.load(), /Install the PocketBase migration/);
+  await assert.rejects(
+    () => f.backend.load(),
+    /Install the PocketBase migration/,
+  );
+});
+test("sign-in and sign-up show user-friendly messages for live PocketBase auth errors", async () => {
+  const f = fixture();
+  // Responses captured from PocketBase v0.40.6 with the Fuloos migrations.
+  f.queue.push(
+    json({ data: {}, message: "Failed to authenticate.", status: 400 }, 400),
+  );
+  await assert.rejects(
+    f.backend.signIn("test@example.test", "wrong-password"),
+    { message: "Incorrect email or password." },
+  );
+  f.queue.push(
+    json(
+      {
+        data: {
+          email: {
+            code: "validation_not_unique",
+            message: "Value must be unique.",
+          },
+        },
+        message: "Failed to create record.",
+        status: 400,
+      },
+      400,
+    ),
+  );
+  await assert.rejects(
+    f.backend.signUp("test@example.test", "test-only-password"),
+    { message: "An account with this email already exists. Sign in instead." },
+  );
+  f.queue.push(
+    json(
+      {
+        data: {
+          passwordConfirm: {
+            code: "validation_values_mismatch",
+            message: "Values don't match.",
+          },
+        },
+        message: "Failed to create record.",
+        status: 400,
+      },
+      400,
+    ),
+  );
+  await assert.rejects(
+    f.backend.signUp("test@example.test", "test-only-password"),
+    { message: "Values don't match." },
+  );
+  assert.equal(f.saved.size, 0);
+});
+test("saving recurring data before its migrations explains what is missing", async () => {
+  const f = fixture();
+  f.queue.push(json(auth));
+  await f.backend.signIn("test@example.test", "test-only-password");
+  f.queue.push(
+    json(
+      { data: {}, message: "Missing collection context.", status: 404 },
+      404,
+    ),
+  );
+  await assert.rejects(
+    f.backend.save("recurring_prefs", {
+      auto_detect: "on",
+      auto_match: "review",
+      dismissed_keys: [],
+    }),
+    /Recurring features aren't installed on the server yet/,
+  );
 });

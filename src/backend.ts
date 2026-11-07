@@ -37,6 +37,23 @@ interface StorageLike {
   removeItem(key: string): void;
 }
 const storageKey = "fuloos.auth.v1";
+
+/** A PocketBase error response, keeping the status and field codes for callers. */
+export class BackendError extends Error {
+  readonly status: number;
+  readonly fields: Record<string, { code?: string; message?: string }>;
+  constructor(
+    message: string,
+    status: number,
+    fields: Record<string, { code?: string; message?: string }> = {},
+  ) {
+    super(message);
+    this.name = "BackendError";
+    this.status = status;
+    this.fields = fields;
+  }
+}
+export class MissingCollectionError extends BackendError {}
 const MAX_DISMISSED_KEYS = 400;
 
 function parseDismissedKeys(raw: unknown): string[] {
@@ -160,8 +177,11 @@ export class PocketBaseBackend {
       )
         this.publish(null);
       if (response.status === 404)
-        throw new Error(
-          "Fuloos backend is not configured yet. Install the PocketBase migration before using live accounts.",
+        throw new MissingCollectionError(
+          path.startsWith("/api/collections/fuloos_recurring")
+            ? "Recurring features aren't installed on the server yet. Apply the recurring PocketBase migrations to enable them."
+            : "Fuloos backend is not configured yet. Install the PocketBase migration before using live accounts.",
+          404,
         );
       if (
         path === "/api/batch" &&
@@ -203,10 +223,12 @@ export class PocketBaseBackend {
               .filter(Boolean)
               .join(" ")
           : "";
-      throw new Error(
+      throw new BackendError(
         details ||
           data?.message ||
           `PocketBase request failed (${response.status}).`,
+        response.status,
+        data?.data && typeof data.data === "object" ? data.data : {},
       );
     }
     return data as T;
@@ -258,28 +280,47 @@ export class PocketBaseBackend {
       );
   }
   async signIn(email: string, password: string): Promise<Session> {
-    return this.accept(
-      await this.request<AuthResponse>(
+    let data: AuthResponse;
+    try {
+      data = await this.request<AuthResponse>(
         "/api/collections/fuloos_users/auth-with-password",
         {
           method: "POST",
           body: JSON.stringify({ identity: email.trim(), password }),
         },
-      ),
-    );
+      );
+    } catch (e) {
+      if (e instanceof BackendError && e.status === 400)
+        throw new BackendError("Incorrect email or password.", 400, e.fields);
+      throw e;
+    }
+    return this.accept(data);
   }
   async signUp(
     email: string,
     password: string,
   ): Promise<{ session: Session | null; verificationRequired: boolean }> {
-    await this.request("/api/collections/fuloos_users/records", {
-      method: "POST",
-      body: JSON.stringify({
-        email: email.trim(),
-        password,
-        passwordConfirm: password,
-      }),
-    });
+    try {
+      await this.request("/api/collections/fuloos_users/records", {
+        method: "POST",
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          passwordConfirm: password,
+        }),
+      });
+    } catch (e) {
+      if (
+        e instanceof BackendError &&
+        e.fields.email?.code === "validation_not_unique"
+      )
+        throw new BackendError(
+          "An account with this email already exists. Sign in instead.",
+          e.status,
+          e.fields,
+        );
+      throw e;
+    }
     return {
       session: await this.signIn(email, password),
       verificationRequired: false,
@@ -300,11 +341,7 @@ export class PocketBaseBackend {
     try {
       return await this.rows<T>(table);
     } catch (e) {
-      if (
-        e instanceof Error &&
-        e.message.includes("Install the PocketBase migration")
-      )
-        return [];
+      if (e instanceof MissingCollectionError) return [];
       throw e;
     }
   }
