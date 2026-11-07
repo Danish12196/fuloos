@@ -70,6 +70,7 @@ import {
   errorMessage,
   minor,
   money,
+  shiftMonth,
   today,
   totals,
   validateTransaction,
@@ -91,6 +92,7 @@ import "./style.css";
 import { PeriodPicker } from "./PeriodPicker";
 import {
   isPeriodSpan,
+  monthsBetween,
   periodDates,
   periodLabel,
   periodMonths,
@@ -1687,7 +1689,14 @@ function App() {
             <BudgetsPage
               ledger={ledger}
               month={month}
-              onMonthChange={setMonth}
+              onMonthChange={(next) => {
+                // Keep a custom range's length when Budgets moves the shared month.
+                if (span === "custom")
+                  setRangeFrom((from) =>
+                    shiftMonth(from, monthsBetween(month, next) - 1),
+                  );
+                setMonth(next);
+              }}
               concealed={concealed}
               busy={busy}
               onAdd={(draft) => setBudgetModal({ draft })}
