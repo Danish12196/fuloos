@@ -160,7 +160,8 @@ export function SmsImport({
           );
         },
       );
-      setDone(true);
+      // Saving continues in the background queue.
+      onClose();
     } catch (e) {
       setError(
         `${(e as Error).message} Import stopped. Saved rows are excluded; review before retrying.`,

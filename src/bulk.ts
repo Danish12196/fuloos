@@ -50,3 +50,19 @@ export function editTransaction(
   return next;
 }
 
+/**
+ * Re-apply an edit on top of the newest saved copy of a record. Only fields
+ * the user changed (edited differs from original) are taken from `edited`;
+ * everything else comes from `latest`, so an earlier queued edit to other
+ * fields is not undone by a later one built from an older snapshot.
+ */
+export function rebaseEdit<T extends object>(
+  original: T,
+  edited: T,
+  latest: T,
+): T {
+  const next = { ...latest };
+  for (const key of Object.keys(edited) as (keyof T)[])
+    if (edited[key] !== original[key]) next[key] = edited[key];
+  return next;
+}
