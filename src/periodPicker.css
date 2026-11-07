@@ -108,7 +108,7 @@
 }
 .period-spans {
   display: grid;
-  grid-template-columns: 1.5fr repeat(5, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 2px;
   padding: 3px;
   margin-bottom: 12px;

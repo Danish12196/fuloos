@@ -89,7 +89,12 @@ import {
 import { demoLedger } from "./demo";
 import "./style.css";
 import { PeriodPicker } from "./PeriodPicker";
-import { isPeriodSpan, periodDates, periodLabel } from "./period";
+import {
+  isPeriodSpan,
+  periodDates,
+  periodLabel,
+  periodMonths,
+} from "./period";
 function demoId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -138,6 +143,7 @@ function App() {
     [kindFilter, setKindFilter] = useState(""),
     [month, setMonth] = useState(today().slice(0, 7)),
     [view, setView] = useState("month"),
+    [rangeFrom, setRangeFrom] = useState(today().slice(0, 7)),
     [hidden, setHidden] = useState(false);
   const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1163,10 +1169,10 @@ function App() {
   const end = new Date(`${month}-01T00:00:00Z`);
   end.setUTCMonth(end.getUTCMonth() + 1);
   const start = new Date(`${month}-01T00:00:00Z`);
-  if (view === "3" || view === "6" || view === "12")
-    start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
-  if (view === "ytd") start.setUTCMonth(0);
-  const rangeLabel = periodLabel(isPeriodSpan(view) ? view : "month", month);
+  const span = isPeriodSpan(view) ? view : "month";
+  const firstMonth = periodMonths(span, month, rangeFrom)?.first ?? month;
+  start.setTime(Date.parse(`${firstMonth}-01T00:00:00Z`));
+  const rangeLabel = periodLabel(span, month, rangeFrom);
   const activeMonths = new Set(
     ledger.transactions.map((t) => t.date.slice(0, 7)),
   );
@@ -1425,17 +1431,19 @@ function App() {
               <PeriodPicker
                 label="Date range"
                 month={month}
-                span={isPeriodSpan(view) ? view : "month"}
-                spans={["month", "3", "6", "ytd", "12", "all"]}
+                from={rangeFrom}
+                span={span}
+                spans={["month", "custom", "ytd", "12", "all"]}
                 currentMonth={today().slice(0, 7)}
                 activeMonths={activeMonths}
                 onChange={(next) => {
                   setView(next.span);
                   setMonth(next.month);
+                  if (next.from) setRangeFrom(next.from);
                 }}
               />
               <span className="muted">
-                {periodDates(isPeriodSpan(view) ? view : "month", month)}
+                {periodDates(span, month, rangeFrom)}
               </span>
             </div>
           )}
