@@ -2,7 +2,12 @@ import { BulkEdit } from "./BulkEdit";
 import { ColorPicker, EmojiField } from "./Appearance";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { backend, createPresetStore, type Session } from "./client";
+import {
+  backend,
+  createLearningStore,
+  createPresetStore,
+  type Session,
+} from "./client";
 import { DeleteAccountDialog } from "./DeleteAccount";
 import { ConfirmHost } from "./ConfirmHost";
 import { confirmDialog } from "./dialogStore";
@@ -48,9 +53,12 @@ import {
 } from "./recurring";
 import { ThemeToggle } from "./ThemeToggle";
 import { TransactionsPanel } from "./TransactionTable";
+import { SettingsDialog } from "./Settings";
+import { useDensity } from "./density";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  Settings as SettingsIcon,
   ArrowLeftRight,
   Plus,
   LayoutDashboard,
@@ -77,6 +85,7 @@ import {
   errorMessage,
   minor,
   money,
+  shiftMonth,
   today,
   totals,
   validateTransaction,
@@ -96,7 +105,13 @@ import {
 import { demoLedger } from "./demo";
 import "./style.css";
 import { PeriodPicker } from "./PeriodPicker";
-import { isPeriodSpan, periodDates, periodLabel } from "./period";
+import {
+  isPeriodSpan,
+  monthsBetween,
+  periodDates,
+  periodLabel,
+  periodMonths,
+} from "./period";
 function demoId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -145,7 +160,10 @@ function App() {
     [kindFilter, setKindFilter] = useState(""),
     [month, setMonth] = useState(today().slice(0, 7)),
     [view, setView] = useState("month"),
+    [rangeFrom, setRangeFrom] = useState(today().slice(0, 7)),
     [hidden, setHidden] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [density] = useDensity();
   const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(
@@ -221,6 +239,10 @@ function App() {
       return { ...l, [table]: [...kept, ...byId.values()] } as Ledger;
     });
   }
+  const learningStore = useMemo(
+    () => createLearningStore(!demo && !!session),
+    [demo, session?.user.id],
+  );
   const presetStore = useMemo(
     () => createPresetStore(!demo && !!session),
     [demo, session?.user.id],
@@ -237,6 +259,14 @@ function App() {
     setRecurringFilter("all");
     queue.cancelQueued();
   }, [session?.user.id, demo]);
+  function toggleCategory(id: string) {
+    setSelectedCategories((old) => {
+      const next = new Set(old);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   function toggleSelection(id: string) {
     setSelected((old) => {
       const next = new Set(old);
@@ -943,6 +973,8 @@ function App() {
     rows: ImportTransaction[],
     progress: (n: number) => void,
     source = "Import",
+    /** Called with how many rows (in order) are confirmed saved; may run after the caller has closed. */
+    onSaved?: (n: number) => void,
   ) {
     rows.forEach((row) => validateTransaction(row, ledger));
     if (demo) {
@@ -954,6 +986,7 @@ function App() {
         ],
       }));
       progress(rows.length);
+      onSaved?.(rows.length);
       return;
     }
     if (!backend || !session) throw new Error("Please sign in.");
@@ -972,6 +1005,7 @@ function App() {
               if (!stillOwner()) return;
               mergeRecords("transactions", records);
               ctx.progress(saved);
+              onSaved?.(saved);
             },
             stillOwner,
           );
@@ -1045,40 +1079,58 @@ function App() {
       setBusy(false);
     }
   }
-  /** Deletes a money account with its recurring schedules and every transaction touching it. */
-  async function deleteMoneyAccount(
-    account: Account,
-    progress: (step: string) => void,
-  ) {
+  /**
+   * Deletes a money account with its recurring schedules and every transaction touching it.
+   * The account leaves the screen at once and the server work runs in the background queue,
+   * so its progress shows in the corner panel instead of inside the dialog.
+   */
+  function deleteMoneyAccount(account: Account) {
+    const plural = (n: number, one: string) =>
+      `${n} ${one}${n === 1 ? "" : "s"}`;
     const plan = planAccountDeletion(ledger, account.id);
     setError("");
-    if (demo) {
-      setLedger((l) => applyAccountDeletion(l, account.id, plan));
-    } else {
+    if (!demo) {
       if (!backend || !session) throw new Error("Please sign in.");
-      const current = generation.current;
-      const total = plan.transactionIds.length;
-      try {
-        if (plan.recurringIds.length) {
-          progress("Deleting recurring schedules…");
-          await backend.removeMany("recurring", plan.recurringIds);
-        }
-        let done = 0;
-        if (total) progress(`Deleting transactions (0 of ${total})…`);
-        await backend.removeMany("transactions", plan.transactionIds, (ids) => {
-          done += ids.length;
-          progress(`Deleting transactions (${done} of ${total})…`);
-        });
-        progress("Deleting the account…");
-        await backend.remove("accounts", account.id);
-      } catch (e) {
-        // Some records may already be gone; show what is left on the server.
-        if (current === generation.current) void load();
-        throw e;
-      }
-      if (current !== generation.current) return;
-      setLedger((l) => applyAccountDeletion(l, account.id, plan));
+      const api = backend;
+      const stillOwner = ownerGuard();
+      const recurringCount = plan.recurringIds.length;
+      const txCount = plan.transactionIds.length;
+      const parts = [
+        txCount && plural(txCount, "transaction"),
+        recurringCount && plural(recurringCount, "schedule"),
+      ].filter(Boolean);
+      queue.enqueue({
+        label: `Delete ${account.name}${parts.length ? ` · ${parts.join(", ")}` : ""}`,
+        total: recurringCount + txCount + 1,
+        run: async (ctx) => {
+          checkOwner(stillOwner);
+          let done = 0;
+          try {
+            if (recurringCount) {
+              await api.removeMany("recurring", plan.recurringIds);
+              done += recurringCount;
+              ctx.progress(done);
+            }
+            await api.removeMany("transactions", plan.transactionIds, (ids) => {
+              for (const id of ids) savedTx.current.delete(id);
+              done += ids.length;
+              ctx.progress(done);
+            });
+            checkOwner(stillOwner);
+            await api.remove("accounts", account.id);
+            // An earlier queued save may have put a deleted record back on screen.
+            if (stillOwner())
+              setLedger((l) => applyAccountDeletion(l, account.id, plan));
+          } catch (e) {
+            // Some records may already be gone; show what is left on the server.
+            if (stillOwner()) await load();
+            throw e;
+          }
+        },
+      });
     }
+    // Take the account off the screen straight away; a failure reloads the ledger.
+    setLedger((l) => applyAccountDeletion(l, account.id, plan));
     const removed = new Set(plan.transactionIds);
     for (const id of removed) savedTx.current.delete(id);
     setSelected((old) => new Set([...old].filter((v) => !removed.has(v))));
@@ -1284,10 +1336,10 @@ function App() {
   const end = new Date(`${month}-01T00:00:00Z`);
   end.setUTCMonth(end.getUTCMonth() + 1);
   const start = new Date(`${month}-01T00:00:00Z`);
-  if (view === "3" || view === "6" || view === "12")
-    start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
-  if (view === "ytd") start.setUTCMonth(0);
-  const rangeLabel = periodLabel(isPeriodSpan(view) ? view : "month", month);
+  const span = isPeriodSpan(view) ? view : "month";
+  const firstMonth = periodMonths(span, month, rangeFrom)?.first ?? month;
+  start.setTime(Date.parse(`${firstMonth}-01T00:00:00Z`));
+  const rangeLabel = periodLabel(span, month, rangeFrom);
   const activeMonths = new Set(
     ledger.transactions.map((t) => t.date.slice(0, 7)),
   );
@@ -1302,6 +1354,13 @@ function App() {
       (s, a) => s + balance(a, ledger.transactions),
       0,
     );
+  const categoryCounts = new Map<string, number>();
+  for (const t of ledger.transactions)
+    if (t.category_id)
+      categoryCounts.set(
+        t.category_id,
+        (categoryCounts.get(t.category_id) ?? 0) + 1,
+      );
   const spending = ledger.categories
     .map((c) => ({
       ...c,
@@ -1396,16 +1455,14 @@ function App() {
               {demo ? "Sample data · not saved" : "Personal workspace"}
             </small>
           </div>
-          {!demo && session && (
-            <button
-              className="icon-button"
-              aria-label="Delete my account"
-              title="Delete my account"
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 size={18} />
-            </button>
-          )}
+          <button
+            className="icon-button"
+            aria-label="Settings"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <SettingsIcon size={18} />
+          </button>
           <button
             className="icon-button"
             aria-label="Sign out"
@@ -1422,6 +1479,19 @@ function App() {
           </button>
         </div>
       </aside>
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onDeleteAccount={
+            !demo && session
+              ? () => {
+                  setSettingsOpen(false);
+                  setDeleteOpen(true);
+                }
+              : undefined
+          }
+        />
+      )}
       {deleteOpen && backend && session && (
         <DeleteAccountDialog
           email={session.user.email}
@@ -1444,7 +1514,7 @@ function App() {
           account={accountToDelete}
           plan={planAccountDeletion(ledger, accountToDelete.id)}
           onClose={() => setAccountToDelete(null)}
-          onDelete={(progress) => deleteMoneyAccount(accountToDelete, progress)}
+          onDelete={() => deleteMoneyAccount(accountToDelete)}
         />
       )}
       {categoriesToDelete && (
@@ -1470,9 +1540,15 @@ function App() {
             <span className="currency-pill">
               AED <span>United Arab Emirates</span>
             </span>
-            <span className="small-avatar">
+            <button
+              type="button"
+              className="small-avatar"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => setSettingsOpen(true)}
+            >
               {demo ? "D" : session?.user.email?.slice(0, 1).toUpperCase()}
-            </span>
+            </button>
           </div>
         </header>
         <div className="content">
@@ -1559,17 +1635,19 @@ function App() {
               <PeriodPicker
                 label="Date range"
                 month={month}
-                span={isPeriodSpan(view) ? view : "month"}
-                spans={["month", "3", "6", "ytd", "12", "all"]}
+                from={rangeFrom}
+                span={span}
+                spans={["month", "custom", "ytd", "12", "all"]}
                 currentMonth={today().slice(0, 7)}
                 activeMonths={activeMonths}
                 onChange={(next) => {
                   setView(next.span);
                   setMonth(next.month);
+                  if (next.from) setRangeFrom(next.from);
                 }}
               />
               <span className="muted">
-                {periodDates(isPeriodSpan(view) ? view : "month", month)}
+                {periodDates(span, month, rangeFrom)}
               </span>
             </div>
           )}
@@ -1813,7 +1891,14 @@ function App() {
             <BudgetsPage
               ledger={ledger}
               month={month}
-              onMonthChange={setMonth}
+              onMonthChange={(next) => {
+                // Keep a custom range's length when Budgets moves the shared month.
+                if (span === "custom")
+                  setRangeFrom((from) =>
+                    shiftMonth(from, monthsBetween(month, next) - 1),
+                  );
+                setMonth(next);
+              }}
               concealed={concealed}
               busy={busy}
               onAdd={(draft) => setBudgetModal({ draft })}
@@ -1886,166 +1971,239 @@ function App() {
                   negative opening balance for amounts you owe.
                 </small>
               </div>
-              <div className="account-grid full">
-                {ledger.accounts.map((a) => (
-                  <article className="account-card" key={a.id}>
-                    <div className="account-top">
-                      <span
-                        className="account-symbol"
-                        style={{ background: a.color + "18", color: a.color }}
-                      >
-                        {a.emoji || <Wallet size={22} />}
-                      </span>
-                      <span className="account-kind">{types[a.type]}</span>
-                      <div className="row-actions">
+              {density === "compact" ? (
+                <section className="panel compact-list">
+                  <div className="compact-head accounts" aria-hidden>
+                    <span>Account</span>
+                    <span>Type</span>
+                    <span>Opening</span>
+                    <span className="num">Balance</span>
+                    <span />
+                  </div>
+                  {ledger.accounts.map((a) => {
+                    const value = balance(a, ledger.transactions);
+                    return (
+                      <div className="compact-row accounts" key={a.id}>
                         <button
-                          className="icon-button"
-                          aria-label={`Edit ${a.name}`}
-                          onClick={() => setModal({ kind: "account", item: a })}
+                          className="compact-name"
+                          onClick={() => {
+                            setPage("Transactions");
+                            setAccountFilter(a.id);
+                          }}
+                          title={`View ${a.name} transactions`}
                         >
-                          <Pencil size={15} />
+                          <span
+                            className="compact-symbol"
+                            style={{
+                              background: a.color + "18",
+                              color: a.color,
+                            }}
+                          >
+                            {a.emoji || <Wallet size={15} />}
+                          </span>
+                          <b>{a.name}</b>
                         </button>
-                        <button
-                          className="icon-button"
-                          disabled={busy}
-                          aria-label={`Delete ${a.name}`}
-                          onClick={() => setAccountToDelete(a)}
+                        <span className="muted">{types[a.type]}</span>
+                        <span className="muted">
+                          {concealed(a.opening_balance)} · {a.opening_date}
+                        </span>
+                        <strong
+                          className={`num ${value < 0 ? "is-negative" : ""}`}
                         >
-                          <Trash2 size={15} />
-                        </button>
+                          {concealed(value)}
+                        </strong>
+                        <span className="compact-actions">
+                          <button
+                            className="icon-button"
+                            aria-label={`Edit ${a.name}`}
+                            onClick={() =>
+                              setModal({ kind: "account", item: a })
+                            }
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            disabled={busy}
+                            aria-label={`Delete ${a.name}`}
+                            onClick={() => setAccountToDelete(a)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </span>
                       </div>
-                    </div>
-                    <h3>{a.name}</h3>
-                    <strong className="large-amount">
-                      {concealed(balance(a, ledger.transactions))}
-                    </strong>
-                    <p className="muted small">
-                      Opening: {concealed(a.opening_balance)} · {a.opening_date}
-                    </p>
-                    <button
-                      className="text-button"
-                      onClick={() => {
-                        setPage("Transactions");
-                        setAccountFilter(a.id);
-                      }}
-                    >
-                      View transactions <ArrowRight size={15} />
-                    </button>
-                  </article>
-                ))}
-                <button
-                  className="add-account-card"
-                  onClick={() => setModal({ kind: "account" })}
-                >
-                  <span>
-                    <Plus size={22} />
-                  </span>
-                  <b>Add an account</b>
-                  <small>Current, savings, credit card or cash</small>
-                </button>
-              </div>
-            </>
-          )}
-          {page === "Categories" && (
-            <div className="category-grid">
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>All categories</h2>
-                  <span className="count">{ledger.categories.length}</span>
-                </div>
-                {ledger.categories.length > 0 && (
-                  <div className="bulk-toolbar category-toolbar">
-                    <label className="selection-label">
-                      <input
-                        type="checkbox"
-                        disabled={busy}
-                        checked={
-                          selectedCategories.size > 0 &&
-                          ledger.categories.every((c) =>
-                            selectedCategories.has(c.id),
-                          )
-                        }
-                        ref={(el) => {
-                          if (el)
-                            el.indeterminate =
-                              selectedCategories.size > 0 &&
-                              !ledger.categories.every((c) =>
-                                selectedCategories.has(c.id),
-                              );
-                        }}
-                        onChange={(e) =>
-                          setSelectedCategories(
-                            e.target.checked
-                              ? new Set(ledger.categories.map((c) => c.id))
-                              : new Set(),
-                          )
-                        }
-                      />
-                      Select all
-                    </label>
-                    <span className="muted small">
-                      {selectedCategories.size} selected
-                    </span>
-                    <button
-                      className="secondary danger-outline"
-                      disabled={busy || !selectedCategories.size}
-                      onClick={() =>
-                        setCategoriesToDelete(
-                          ledger.categories
-                            .filter((c) => selectedCategories.has(c.id))
-                            .map((c) => c.id),
-                        )
-                      }
-                    >
-                      <Trash2 size={15} /> Delete selected
-                    </button>
-                    {selectedCategories.size > 0 && (
+                    );
+                  })}
+                  {!ledger.accounts.length && (
+                    <Empty
+                      title="No accounts yet"
+                      text="Add a current, savings, credit card or cash account."
+                    />
+                  )}
+                </section>
+              ) : (
+                <div className="account-grid full">
+                  {ledger.accounts.map((a) => (
+                    <article className="account-card" key={a.id}>
+                      <div className="account-top">
+                        <span
+                          className="account-symbol"
+                          style={{ background: a.color + "18", color: a.color }}
+                        >
+                          {a.emoji || <Wallet size={22} />}
+                        </span>
+                        <span className="account-kind">{types[a.type]}</span>
+                        <div className="row-actions">
+                          <button
+                            className="icon-button"
+                            aria-label={`Edit ${a.name}`}
+                            onClick={() =>
+                              setModal({ kind: "account", item: a })
+                            }
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            disabled={busy}
+                            aria-label={`Delete ${a.name}`}
+                            onClick={() => setAccountToDelete(a)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                      <h3>{a.name}</h3>
+                      <strong className="large-amount">
+                        {concealed(balance(a, ledger.transactions))}
+                      </strong>
+                      <p className="muted small">
+                        Opening: {concealed(a.opening_balance)} ·{" "}
+                        {a.opening_date}
+                      </p>
                       <button
                         className="text-button"
-                        disabled={busy}
-                        onClick={() => setSelectedCategories(new Set())}
+                        onClick={() => {
+                          setPage("Transactions");
+                          setAccountFilter(a.id);
+                        }}
                       >
-                        Clear selection
+                        View transactions <ArrowRight size={15} />
                       </button>
-                    )}
-                  </div>
-                )}
-                {ledger.categories.map((c) => (
-                  <div
-                    className={`category-item ${selectedCategories.has(c.id) ? "is-selected" : ""}`}
-                    key={c.id}
+                    </article>
+                  ))}
+                  <button
+                    className="add-account-card"
+                    onClick={() => setModal({ kind: "account" })}
                   >
+                    <span>
+                      <Plus size={22} />
+                    </span>
+                    <b>Add an account</b>
+                    <small>Current, savings, credit card or cash</small>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          {page === "Categories" && ledger.categories.length > 0 && (
+            <div className="panel bulk-toolbar category-toolbar">
+              <label className="selection-label">
+                <input
+                  type="checkbox"
+                  disabled={busy}
+                  checked={
+                    selectedCategories.size > 0 &&
+                    ledger.categories.every((c) => selectedCategories.has(c.id))
+                  }
+                  ref={(el) => {
+                    if (el)
+                      el.indeterminate =
+                        selectedCategories.size > 0 &&
+                        !ledger.categories.every((c) =>
+                          selectedCategories.has(c.id),
+                        );
+                  }}
+                  onChange={(e) =>
+                    setSelectedCategories(
+                      e.target.checked
+                        ? new Set(ledger.categories.map((c) => c.id))
+                        : new Set(),
+                    )
+                  }
+                />
+                Select all
+              </label>
+              <span className="muted small">
+                {selectedCategories.size} selected
+              </span>
+              <button
+                className="secondary danger-outline"
+                disabled={busy || !selectedCategories.size}
+                onClick={() =>
+                  setCategoriesToDelete(
+                    ledger.categories
+                      .filter((c) => selectedCategories.has(c.id))
+                      .map((c) => c.id),
+                  )
+                }
+              >
+                <Trash2 size={15} /> Delete selected
+              </button>
+              {selectedCategories.size > 0 && (
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => setSelectedCategories(new Set())}
+                >
+                  Clear selection
+                </button>
+              )}
+            </div>
+          )}
+          {page === "Categories" && density === "compact" && (
+            <section className="panel compact-list">
+              <div className="compact-head categories" aria-hidden>
+                <span>Category</span>
+                <span>Description</span>
+                <span className="num">Transactions</span>
+                <span />
+              </div>
+              {ledger.categories.map((c) => (
+                <div
+                  className={`compact-row categories ${selectedCategories.has(c.id) ? "is-selected" : ""}`}
+                  key={c.id}
+                >
+                  <span className="compact-name">
                     <input
                       type="checkbox"
                       className="transaction-select category-select"
                       aria-label={`Select ${c.name}`}
                       disabled={busy}
                       checked={selectedCategories.has(c.id)}
-                      onChange={() =>
-                        setSelectedCategories((old) => {
-                          const next = new Set(old);
-                          if (next.has(c.id)) next.delete(c.id);
-                          else next.add(c.id);
-                          return next;
-                        })
-                      }
+                      onChange={() => toggleCategory(c.id)}
                     />
                     <span
-                      className="category-symbol"
+                      className="compact-symbol"
                       style={{ color: c.color, background: c.color + "18" }}
                     >
-                      {c.emoji || <Tags size={20} />}
+                      {c.emoji || <Tags size={15} />}
                     </span>
-                    <div>
-                      <b>{c.name}</b>
-                      <p>{c.description || "No description"}</p>
-                    </div>
+                    <b>{c.name}</b>
+                  </span>
+                  <span className="muted compact-text" title={c.description}>
+                    {c.description || "—"}
+                  </span>
+                  <span className="num muted">
+                    {categoryCounts.get(c.id) ?? 0}
+                  </span>
+                  <span className="compact-actions">
                     <button
                       className="icon-button"
                       aria-label={`Edit ${c.name}`}
                       onClick={() => setModal({ kind: "category", item: c })}
                     >
-                      <Pencil size={15} />
+                      <Pencil size={14} />
                     </button>
                     <button
                       className="icon-button"
@@ -2053,17 +2211,79 @@ function App() {
                       aria-label={`Delete ${c.name}`}
                       onClick={() => setCategoriesToDelete([c.id])}
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
+                  </span>
+                </div>
+              ))}
+              {!ledger.categories.length && (
+                <Empty
+                  title="Make it your own"
+                  text="Create categories that fit your life."
+                />
+              )}
+            </section>
+          )}
+          {page === "Categories" && density === "relaxed" && (
+            <div className="account-grid full category-cards">
+              {ledger.categories.map((c) => (
+                <article
+                  className={`account-card ${selectedCategories.has(c.id) ? "is-selected" : ""}`}
+                  key={c.id}
+                >
+                  <div className="account-top">
+                    <input
+                      type="checkbox"
+                      className="transaction-select category-select"
+                      aria-label={`Select ${c.name}`}
+                      disabled={busy}
+                      checked={selectedCategories.has(c.id)}
+                      onChange={() => toggleCategory(c.id)}
+                    />
+                    <span
+                      className="account-symbol"
+                      style={{ background: c.color + "18", color: c.color }}
+                    >
+                      {c.emoji || <Tags size={20} />}
+                    </span>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        aria-label={`Edit ${c.name}`}
+                        onClick={() => setModal({ kind: "category", item: c })}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        disabled={busy}
+                        aria-label={`Delete ${c.name}`}
+                        onClick={() => setCategoriesToDelete([c.id])}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
-                ))}
-                {!ledger.categories.length && (
-                  <Empty
-                    title="Make it your own"
-                    text="Create categories that fit your life."
-                  />
-                )}
-              </section>
+                  <h3>{c.name}</h3>
+                  <p className="muted small category-card-text">
+                    {c.description || "No description"}
+                  </p>
+                  <span className="account-kind">
+                    {categoryCounts.get(c.id) ?? 0} transaction
+                    {categoryCounts.get(c.id) === 1 ? "" : "s"}
+                  </span>
+                </article>
+              ))}
+              <button
+                className="add-account-card"
+                onClick={() => setModal({ kind: "category" })}
+              >
+                <span>
+                  <Plus size={22} />
+                </span>
+                <b>Add a category</b>
+                <small>Groceries, rent, salary, anything</small>
+              </button>
             </div>
           )}
           {page === "Transactions" && (
@@ -2128,9 +2348,10 @@ function App() {
         <SmsImport
           ledger={ledger}
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
+          learning={learningStore}
           onClose={() => setSmsOpen(false)}
-          onImport={(rows, progress) =>
-            importTransactions(rows, progress, "SMS import:")
+          onImport={(rows, progress, onSaved) =>
+            importTransactions(rows, progress, "SMS import:", onSaved)
           }
         />
       )}

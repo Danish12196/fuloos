@@ -7,6 +7,14 @@ import { loadLedgerModel, type ModelState } from "./ledger/loader";
 import { loadMap, saveMap, type CategoryMap } from "./ledger/mapping";
 import { markDuplicates, previewSms } from "./ledger/smsImport";
 import {
+  buildPersonalModel,
+  makeExample,
+  suggestCategory,
+  type LearningExample,
+  type LearningSettings,
+} from "./ledger/learning";
+import { withConsent, type LearningStore } from "./ledger/learningStore";
+import {
   BANK_NAMES,
   smsFromBackupXml,
   splitPastedSms,
@@ -23,16 +31,21 @@ type Edit = Partial<Pick<ImportTransaction, "date" | "payee" | "category_id">>;
 export function SmsImport({
   ledger,
   owner,
+  learning,
   onClose,
   onImport,
 }: {
   ledger: Ledger;
   /** Key for this user's saved category mapping (user id, or "demo"). */
   owner: string;
+  /** Learning settings and correction log (account, or this session in demo mode). */
+  learning: LearningStore;
   onClose: () => void;
   onImport: (
     rows: ImportTransaction[],
     progress: (n: number) => void,
+    /** Called with how many of the rows (in order) are confirmed saved, possibly after the dialog closed. */
+    onSaved: (n: number) => void,
   ) => Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -57,11 +70,39 @@ export function SmsImport({
   const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
+  const [settings, setSettings] = useState<LearningSettings | null>(null);
+  const [examples, setExamples] = useState<LearningExample[]>([]);
+  const [learningError, setLearningError] = useState("");
+  const [learningBusy, setLearningBusy] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const categoryIds = useMemo(
+    () => new Set(ledger.categories.map((c) => c.id)),
+    [ledger.categories],
+  );
 
   useEffect(() => {
     dialog.current?.showModal();
     let live = true;
     void loadLedgerModel().then((s) => live && setModelState(s));
+    learning
+      .load(new Set(ledger.categories.map((c) => c.id)))
+      .then((data) => {
+        if (!live) return;
+        setSettings(data.settings);
+        setExamples(data.examples);
+        // A mapping saved on the account wins over this browser's guess.
+        if (data.storedMap) {
+          setMap((m) => ({ ...m, ...data.storedMap }));
+          setMapOpen(false);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        setSettings(null);
+        setLearningError(
+          `Learning settings could not be loaded (${e instanceof Error ? e.message : "unknown error"}). Suggestions still work without them.`,
+        );
+      });
     return () => {
       live = false;
     };
@@ -72,16 +113,28 @@ export function SmsImport({
     [fileMessages, pasted],
   );
   const model = modelState.status === "ready" ? modelState.model : null;
+  const learnOn = !!settings?.learn_consent;
+  const personal = useMemo(
+    () =>
+      learnOn && examples.length
+        ? buildPersonalModel(examples, model, map, categoryIds)
+        : null,
+    [learnOn, examples, model, map, categoryIds],
+  );
+  const suggest = useMemo(
+    () => (merchant: string | null, amountAed: number) =>
+      suggestCategory(personal, model, map, merchant, amountAed),
+    [personal, model, map],
+  );
   const preview = useMemo(
     () =>
       previewSms(
         messages,
         { account, fallbackDate, bank: bank || null },
         ledger,
-        model,
-        map,
+        suggest,
       ),
-    [messages, account, fallbackDate, bank, ledger, model, map],
+    [messages, account, fallbackDate, bank, ledger, suggest],
   );
   // Duplicates are re-checked on the edited values (a changed date or payee can create or clear one).
   const rows = markDuplicates(
@@ -112,6 +165,72 @@ export function SmsImport({
   function updateMap(next: CategoryMap) {
     setMap(next);
     saveMap(owner, next);
+    if (settings) {
+      const updated = { ...settings, category_map: next };
+      setSettings(updated);
+      learning
+        .saveSettings(updated)
+        .then(setSettings)
+        .catch((e: unknown) =>
+          setLearningError(
+            `Could not save the mapping: ${e instanceof Error ? e.message : "unknown error"}`,
+          ),
+        );
+    }
+  }
+  async function setLearn(on: boolean) {
+    if (!settings) return;
+    setLearningBusy(true);
+    setLearningError("");
+    try {
+      const saved = await learning.saveSettings(
+        withConsent({ ...settings, category_map: map }, on),
+      );
+      setSettings(saved);
+      if (on) {
+        const data = await learning.load(categoryIds);
+        setExamples(data.examples);
+      } else setExamples([]);
+    } catch (e) {
+      setLearningError(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setLearningBusy(false);
+    }
+  }
+  async function clearLearning() {
+    setLearningBusy(true);
+    setLearningError("");
+    try {
+      await learning.clearExamples();
+      setExamples([]);
+      setConfirmClear(false);
+    } catch (e) {
+      setLearningError(e instanceof Error ? e.message : "Could not delete.");
+    } finally {
+      setLearningBusy(false);
+    }
+  }
+  /** Log the user's final choices for imported expenses (only with consent; cleaned merchant text only). */
+  async function recordCorrections(rows: typeof selected) {
+    if (!learnOn) return;
+    const list = rows
+      .map((r) =>
+        r.transaction?.type === "expense"
+          ? makeExample({
+              merchant: r.parsed?.merchant_clean ?? null,
+              payee: r.transaction.payee,
+              amount: r.transaction.amount,
+              category_id: r.transaction.category_id,
+              suggested_category_id: r.suggestion?.category_id ?? null,
+              source: "sms",
+              model_version: model ? `ledger-${model.meta.version}` : "rules",
+            })
+          : null,
+      )
+      .filter((e): e is LearningExample => !!e);
+    if (!list.length) return;
+    await learning.addExamples(list);
+    setExamples((prev) => [...prev, ...list]);
   }
   function resetInputs() {
     setEdits({});
@@ -149,6 +268,20 @@ export function SmsImport({
     setTotal(selected.length);
     setProgress(0);
     setError("");
+    // Log corrections only for rows confirmed saved, in order, so a failed or retried import is never counted twice.
+    const batch = selected;
+    let recorded = 0;
+    let logging = Promise.resolve();
+    const onSaved = (n: number) => {
+      const fresh = batch.slice(recorded, n);
+      recorded = Math.max(recorded, n);
+      if (!fresh.length) return;
+      logging = logging
+        .then(() => recordCorrections(fresh))
+        .catch(() => {
+          // A failed log write only means less learning; the transactions are saved.
+        });
+    };
     try {
       await onImport(
         selected.map((r) => r.transaction!),
@@ -159,6 +292,7 @@ export function SmsImport({
               new Set([...prev, ...selected.slice(0, n).map((r) => r.index)]),
           );
         },
+        onSaved,
       );
       // Saving continues in the background queue.
       onClose();
@@ -285,6 +419,76 @@ export function SmsImport({
         <p className="muted small" role="status">
           {modelNote}
         </p>
+        <section className="sms-learning" aria-label="Learning">
+          <label className="csv-check">
+            <input
+              type="checkbox"
+              checked={learnOn}
+              disabled={!settings || learningBusy || busy}
+              onChange={(e) => void setLearn(e.target.checked)}
+            />
+            Learn from my categorisations
+          </label>
+          <p className="muted small">
+            When on, Fuloos keeps the cleaned merchant name, amount, payee and
+            category you choose for each imported expense
+            {learning.scope === "account"
+              ? " in your account"
+              : " for this session only"}
+            , and uses them on this device to suggest your own categories next
+            time. SMS text is never kept. Turning this off stops learning;
+            delete the data below to remove it.
+          </p>
+          {learnOn && (
+            <p className="muted small" role="status">
+              {examples.length} saved{" "}
+              {examples.length === 1 ? "correction" : "corrections"}.{" "}
+              {personal?.stats.usesClassifier
+                ? `Your personal model is on: ${Math.round((personal.stats.personalAccuracy ?? 0) * 100)}% right on your latest ${personal.stats.holdout}, against ${Math.round((personal.stats.baselineAccuracy ?? 0) * 100)}% for the standard mapping.`
+                : examples.length < 20
+                  ? "Exact merchants you corrected are reused now; the personal model starts after 20 corrections."
+                  : "Exact merchants you corrected are reused; the personal model stays off until it beats the standard mapping on your recent corrections."}
+            </p>
+          )}
+          {(learnOn || !!settings?.consent_at) &&
+            (confirmClear ? (
+              <div className="csv-category-actions">
+                <span className="small">
+                  Delete all saved corrections? This can't be undone.
+                </span>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={learningBusy}
+                  onClick={() => void clearLearning()}
+                >
+                  Delete learning data
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={learningBusy}
+                  onClick={() => setConfirmClear(false)}
+                >
+                  Keep
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="secondary"
+                disabled={learningBusy}
+                onClick={() => setConfirmClear(true)}
+              >
+                Delete learning data…
+              </button>
+            ))}
+          {learningError && (
+            <p role="alert" className="notice">
+              {learningError}
+            </p>
+          )}
+        </section>
         <details
           open={mapOpen}
           onToggle={(e) => setMapOpen((e.target as HTMLDetailsElement).open)}
@@ -292,7 +496,10 @@ export function SmsImport({
           <summary>Match suggestions to your categories</summary>
           <p className="muted small">
             Suggestions come in 12 standard groups. Choose which of your
-            categories each group should fill. This is saved in this browser.
+            categories each group should fill.
+            {learning.scope === "account"
+              ? " This is saved to your account."
+              : " This is saved in this browser."}
           </p>
           <div className="csv-grid sms-map">
             {CANONICAL.map((c) => (
@@ -470,11 +677,15 @@ export function SmsImport({
                                   </option>
                                 ))}
                               </select>
-                              {s?.category && (
+                              {s && s.decidedBy !== "none" && (
                                 <small className="muted">
                                   {" "}
-                                  {CANONICAL_LABEL[s.category]} ·{" "}
-                                  {Math.round(s.confidence * 100)}% (
+                                  {s.canonical
+                                    ? CANONICAL_LABEL[s.canonical]
+                                    : (ledger.categories.find(
+                                        (c) => c.id === s.category_id,
+                                      )?.name ?? "")}{" "}
+                                  · {Math.round(s.confidence * 100)}% (
                                   {s.decidedBy})
                                 </small>
                               )}
