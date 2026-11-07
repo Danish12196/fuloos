@@ -20,7 +20,7 @@ No user was created on the production server. To verify sign-up and sign-in end 
 FULOOS_TEST_EMAIL=you+fuloos-test@example.com FULOOS_TEST_PASSWORD='long-random-password' npm run check:live -- --signup
 ```
 
-Omit `--signup` to reuse an existing test user, or omit the credentials to run only the read-only collection checks. Set `FULOOS_PB_URL` to test another server. Users cannot delete themselves (`deleteRule` is null), so remove the test user from the PocketBase dashboard afterwards.
+Omit `--signup` to reuse an existing test user, or omit the credentials to run only the read-only collection checks. Set `FULOOS_PB_URL` to test another server. Remove the test user afterwards with **Delete my account** in the app (after the lockdown migration), or from the dashboard as described under "Clearing test data".
 
 ## Installation & Upgrades
 
@@ -32,6 +32,7 @@ Omit `--signup` to reuse an existing test user, or omit the credentials to run o
    - `1793968200_recurring_automation.js` — adds `quarterly` frequency, `match_source` and `match_reason` on occurrences, and creates `fuloos_recurring_prefs` collection with per-user ownership rules and triggers.
    - `1794054600_csv_presets.js` — creates `fuloos_csv_presets` so CSV column-mapping presets are stored per user and follow them across devices.
    - `1794141000_budgets.js` — creates `fuloos_budgets` (monthly per-category limits) with per-user ownership rules and integrity triggers.
+   - `1794227400_lockdown.js` — lets users delete their own account, and creates the owner-only `fuloos_ml_settings` and `fuloos_ml_examples` collections for AI suggestions.
 3. Run `./pocketbase migrate up` using the instance's existing data and migrations paths, then restart PocketBase. Alternatively, the standard server applies pending migrations on startup. Use the existing container/service's normal deployment process, rather than starting a second instance over the same database.
 4. Keep HTTPS enabled. If the server restricts allowed origins, allow the exact Vercel production origin and localhost development origin. Do not put administrator tokens into Vercel frontend variables.
 5. Set `VITE_POCKETBASE_URL=https://pb.danishali.dev` as a **build** environment variable, then rebuild/redeploy the frontend. Without it, Fuloos remains an explicitly labeled in-memory demo.
@@ -70,6 +71,17 @@ API rules scope every ledger and recurring record to its owner and prevent reass
 - **`fuloos_budgets`**: `user_id`, `category_id` (same user's category), `amount` (integer fils `0..100,000,000,000`, zero allowed), `start_month` (`YYYY-MM`) and optional `end_month` (`YYYY-MM`, on or after `start_month`; empty means it repeats indefinitely).
 - **Triggers**: validate same-user category ownership, integer fils, real calendar months between 1970-01 and 2100-12, and reject overlapping month ranges for the same user and category. Ownership cannot be changed. Deleting a category deletes its budgets. Budgets never change account balances.
 - The frontend treats a missing `fuloos_budgets` collection (404 before the migration is applied) as having no budgets.
+
+### Lockdown migration (`1794227400_lockdown.js`)
+
+- **Account self-delete**: `fuloos_users.deleteRule` becomes `id = @request.auth.id` (Fuloos users only). The app's **Delete my account** button first deletes the user's recurring schedules (their confirmed occurrences go with them) and transactions in batches of 100, then deletes the user. PocketBase's cascade then removes accounts, categories, budgets, CSV presets, recurring preferences and AI data. The order matters because the account and category delete guards refuse while transactions or schedules still point at them, and PocketBase does not cascade in a fixed order. A partial run is safe to retry.
+- **`fuloos_ml_settings`**: one row per user (`UNIQUE(user_id)`): `learn_consent`, `share_consent`, `consent_version`, `consent_at`, and `category_map` (a JSON object mapping each base-model category to the user's `fuloos_categories` ids).
+- **`fuloos_ml_examples`**: the user's correction log: `merchant_text` (cleaned and masked, 1–120 characters, never the raw SMS), `payee`, `amount` (integer fils), optional `category_id` (same user; cleared if the category is deleted), `source` (`sms | csv | manual`), `model_version`, `suggested_category`, `accepted`, `created`.
+- Both are owner-only with the same rules as the ledger collections; ownership cannot change. Nothing in them is shared. Sharing examples for base-model retraining would be a separate, explicit export step.
+
+### Clearing test data from the dashboard
+
+Truncate collections in this order so no delete guard blocks: `fuloos_recurring_occurrences`, `fuloos_recurring_prefs`, `fuloos_budgets`, `fuloos_csv_presets`, `fuloos_ml_examples`, `fuloos_ml_settings`, `fuloos_recurring`, `fuloos_transactions`, `fuloos_categories`, `fuloos_accounts`, `fuloos_users`. To remove one user, delete their recurring schedules and transactions first, then the user.
 
 Each migration includes a down migration that **deletes its Fuloos collections and their records**. Do not run `migrate down` on real data as a routine fix. Restore a verified backup for a production rollback.
 

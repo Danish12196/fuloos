@@ -596,6 +596,74 @@ export class PocketBaseBackend {
       );
     }
   }
+  private async recordIds(collection: string): Promise<string[]> {
+    const ids: string[] = [];
+    try {
+      for (let page = 1; ; page++) {
+        const result = await this.request<{
+          items: { id: string }[];
+          totalPages: number;
+        }>(
+          `/api/collections/${collection}/records?page=${page}&perPage=500&sort=id&fields=id`,
+        );
+        ids.push(...result.items.map((r) => r.id));
+        if (page >= result.totalPages) break;
+      }
+    } catch (e) {
+      if (e instanceof MissingCollectionError) return [];
+      throw e;
+    }
+    return ids;
+  }
+  /**
+   * Permanently deletes the signed-in user and everything they own.
+   * Recurring schedules (and with them their confirmed occurrences) and transactions go first,
+   * because the server refuses to delete accounts or categories that still have them.
+   * Deleting the user then cascades to accounts, categories, budgets, presets and AI data.
+   * Safe to retry: a partial run only leaves fewer records to remove next time.
+   */
+  async deleteAccount(
+    progress: (step: string) => void = () => {},
+  ): Promise<void> {
+    const session = this.session;
+    if (!session) throw new Error("Please sign in.");
+    for (const [collection, label] of [
+      ["fuloos_recurring", "recurring schedules"],
+      ["fuloos_transactions", "transactions"],
+    ] as const) {
+      const ids = await this.recordIds(collection);
+      for (let offset = 0; offset < ids.length; offset += IMPORT_BATCH_SIZE) {
+        if (this.session?.user.id !== session.user.id)
+          throw new Error("Session changed. Sign in again to finish deleting.");
+        progress(`Deleting ${label} (${offset} of ${ids.length})…`);
+        await this.request("/api/batch", {
+          method: "POST",
+          body: JSON.stringify({
+            requests: ids
+              .slice(offset, offset + IMPORT_BATCH_SIZE)
+              .map((id) => ({
+                method: "DELETE",
+                url: `/api/collections/${collection}/records/${encodeURIComponent(id)}`,
+              })),
+          }),
+        });
+      }
+    }
+    progress("Deleting your account…");
+    try {
+      await this.request(
+        `/api/collections/fuloos_users/records/${encodeURIComponent(session.user.id)}`,
+        { method: "DELETE" },
+      );
+    } catch (e) {
+      if (e instanceof BackendError && e.status === 403)
+        throw new Error(
+          "Account deletion isn't enabled on the server yet. Apply the latest PocketBase migration and try again.",
+        );
+      throw e;
+    }
+    this.publish(null);
+  }
   async remove(table: Table, id: string): Promise<void> {
     if (!this.session) throw new Error("Please sign in.");
     await this.request(
