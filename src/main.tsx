@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, createPresetStore, type Session } from "./client";
 import { CsvImport } from "./CsvImport";
+import { SmsImport } from "./SmsImport";
 import {
   BudgetEditorModal,
   BudgetReportPanel,
@@ -128,6 +129,7 @@ function App() {
     [month, setMonth] = useState(today().slice(0, 7)),
     [view, setView] = useState("month"),
     [hidden, setHidden] = useState(false);
+  const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
   const [recurringModal, setRecurringModal] = useState<{
@@ -1705,6 +1707,13 @@ function App() {
                 >
                   Import CSV
                 </button>
+                <button
+                  className="secondary"
+                  disabled={busy || loading || !ledger.accounts.length}
+                  onClick={() => setSmsOpen(true)}
+                >
+                  Import SMS
+                </button>
                 <label className="search">
                   <Search size={17} />
                   <input
@@ -1825,6 +1834,14 @@ function App() {
           onCreateCategory={async (value) => {
             await save("categories", value);
           }}
+        />
+      )}
+      {smsOpen && (
+        <SmsImport
+          ledger={ledger}
+          owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
+          onClose={() => setSmsOpen(false)}
+          onImport={importTransactions}
         />
       )}
       {recurringModal && (
