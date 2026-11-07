@@ -47,8 +47,6 @@ import {
   LogOut,
   X,
   Search,
-  ChevronLeft,
-  ChevronRight,
   ArrowRight,
   Check,
   Eye,
@@ -65,7 +63,6 @@ import {
   errorMessage,
   minor,
   money,
-  shiftMonth,
   today,
   totals,
   validateTransaction,
@@ -84,6 +81,8 @@ import {
 } from "./domain";
 import { demoLedger } from "./demo";
 import "./style.css";
+import { PeriodPicker } from "./PeriodPicker";
+import { isPeriodSpan, periodDates, periodLabel } from "./period";
 function demoId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -1015,10 +1014,10 @@ function App() {
   if (view === "3" || view === "6" || view === "12")
     start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
   if (view === "ytd") start.setUTCMonth(0);
-  const rangeLabel =
-    view === "all"
-      ? "All time"
-      : `${start.toISOString().slice(0, 10)} – ${new Date(end.getTime() - 86400000).toISOString().slice(0, 10)}`;
+  const rangeLabel = periodLabel(isPeriodSpan(view) ? view : "month", month);
+  const activeMonths = new Set(
+    ledger.transactions.map((t) => t.date.slice(0, 7)),
+  );
   const monthly = ledger.transactions.filter(
       (t) =>
         view === "all" ||
@@ -1263,44 +1262,21 @@ function App() {
             page === "Transactions" ||
             page === "Reports") && (
             <div className="period-row">
-              <select
-                aria-label="Date range"
-                value={view}
-                onChange={(e) => {
-                  setView(e.target.value);
-                  setMonth(today().slice(0, 7));
+              <PeriodPicker
+                label="Date range"
+                month={month}
+                span={isPeriodSpan(view) ? view : "month"}
+                spans={["month", "3", "6", "ytd", "12", "all"]}
+                currentMonth={today().slice(0, 7)}
+                activeMonths={activeMonths}
+                onChange={(next) => {
+                  setView(next.span);
+                  setMonth(next.month);
                 }}
-              >
-                <option value="month">Month</option>
-                <option value="3">3 months</option>
-                <option value="6">6 months</option>
-                <option value="ytd">Year to date</option>
-                <option value="12">1 year</option>
-                <option value="all">All time</option>
-              </select>
-              <div className="month-control">
-                <button
-                  className="icon-button"
-                  aria-label="Previous month"
-                  onClick={() => setMonth((m) => shiftMonth(m, -1))}
-                >
-                  <ChevronLeft size={17} />
-                </button>
-                <span>
-                  {new Date(`${month}-15T12:00:00Z`).toLocaleDateString(
-                    "en-GB",
-                    { month: "long", year: "numeric", timeZone: "Asia/Dubai" },
-                  )}
-                </span>
-                <button
-                  className="icon-button"
-                  aria-label="Next month"
-                  onClick={() => setMonth((m) => shiftMonth(m, 1))}
-                >
-                  <ChevronRight size={17} />
-                </button>
-              </div>
-              <span className="muted">{rangeLabel}</span>
+              />
+              <span className="muted">
+                {periodDates(isPeriodSpan(view) ? view : "month", month)}
+              </span>
             </div>
           )}
           {page === "Overview" && (
