@@ -287,7 +287,7 @@ test("budgets migration enforces ownership rules, fils, valid months and no over
     runInNewContext(
       await readFile(
         new URL(
-          "../pocketbase/pb_migrations/1794054600_budgets.js",
+          "../pocketbase/pb_migrations/1794141000_budgets.js",
           import.meta.url,
         ),
         "utf8",

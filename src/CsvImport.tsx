@@ -11,28 +11,13 @@ import {
 } from "./csv";
 import {
   buildPreset,
-  deletePreset,
-  loadPresets,
   presetKey,
-  renamePreset,
   resolvePreset,
-  savePreset,
   suggestPreset,
   type CsvPreset,
   type MissingPresetColumn,
-  type PresetStorage,
+  type PresetStore,
 } from "./csvPresets";
-
-const STORAGE_WRITE_ERROR =
-  "The preset change could not be saved because browser storage is full or unavailable.";
-
-function getBrowserStorage(): PresetStorage | null {
-  try {
-    return typeof window !== "undefined" ? window.localStorage : null;
-  } catch {
-    return null;
-  }
-}
 
 function PresetNameRow({
   label,
@@ -92,8 +77,10 @@ export function CsvImport({
   onImport,
   onCreateCategory,
   onCreateCategories,
+  presetStore,
 }: {
   ledger: Ledger;
+  presetStore: PresetStore;
   onCreateCategories: (
     values: Omit<Category, "id">[],
     progress: (saved: number) => void,
@@ -139,9 +126,12 @@ export function CsvImport({
     dateFormat: "DMY",
     account: ledger.accounts[0]?.id ?? "",
   });
-  const [presets, setPresets] = useState<CsvPreset[]>(() =>
-    loadPresets(getBrowserStorage()),
-  );
+  const [presets, setPresets] = useState<CsvPreset[]>([]);
+  const [presetsState, setPresetsState] = useState<
+    "loading" | "ready" | "failed"
+  >("loading");
+  const [presetBusy, setPresetBusy] = useState(false);
+  const [presetScope, setPresetScope] = useState(presetStore.scope());
   const [activePresetName, setActivePresetName] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [presetError, setPresetError] = useState("");
@@ -155,6 +145,33 @@ export function CsvImport({
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
+
+  const loadAttempt = useRef(0);
+  function loadPresetList() {
+    const attempt = ++loadAttempt.current;
+    setPresetsState("loading");
+    setPresetError("");
+    presetStore
+      .load()
+      .then((result) => {
+        if (attempt !== loadAttempt.current) return;
+        setPresets(result.presets);
+        setPresetScope(presetStore.scope());
+        setPresetsState("ready");
+        if (result.notice) setPresetStatus(result.notice);
+      })
+      .catch((e) => {
+        if (attempt !== loadAttempt.current) return;
+        setPresetsState("failed");
+        setPresetError(`Could not load presets. ${(e as Error).message}`);
+      });
+  }
+  useEffect(() => {
+    loadPresetList();
+    return () => {
+      loadAttempt.current++;
+    };
+  }, [presetStore]);
 
   let rows: string[][] = [],
     parseError = "";
@@ -183,7 +200,8 @@ export function CsvImport({
         : suggestPreset(presets, text),
     [presets, text, suggestionDismissed, activePreset],
   );
-  const canSavePreset = !!firstRow && !parseError;
+  const presetsReady = presetsState === "ready";
+  const canSavePreset = presetsReady && !!firstRow && !parseError;
   const activeMissing = missingNotice
     ? missingNotice.missing.filter((m) => {
         if (m.field === "amount" && options.split) return false;
@@ -236,8 +254,9 @@ export function CsvImport({
     applyPreset(preset, text);
   }
 
-  function handleSavePreset(name: string) {
-    if (!canSavePreset || !firstRow) return;
+  async function handleSavePreset(name: string) {
+    if (!canSavePreset || !firstRow || presetBusy) return;
+    setPresetBusy(true);
     try {
       const preset = buildPreset({
         name,
@@ -247,12 +266,7 @@ export function CsvImport({
         firstRow,
         options,
       });
-      const result = savePreset(getBrowserStorage(), preset);
-      if (!result.persisted) {
-        setPresetError(STORAGE_WRITE_ERROR);
-        setPresetStatus("");
-        return;
-      }
+      const result = await presetStore.save(preset);
       setPresets(result.presets);
       setActivePresetName(preset.name);
       setRenaming(false);
@@ -266,21 +280,18 @@ export function CsvImport({
     } catch (e) {
       setPresetError((e as Error).message);
       setPresetStatus("");
+    } finally {
+      setPresetBusy(false);
     }
   }
 
-  function handleRenamePreset(name: string) {
-    if (!activePreset) return;
+  async function handleRenamePreset(name: string) {
+    if (!activePreset || presetBusy) return;
+    setPresetBusy(true);
     try {
       const oldName = activePreset.name;
       const nextName = name.trim();
-      const result = renamePreset(getBrowserStorage(), oldName, name);
-      if (!result.persisted) {
-        setPresetError(STORAGE_WRITE_ERROR);
-        setPresetStatus("");
-        return;
-      }
-      setPresets(result.presets);
+      setPresets(await presetStore.rename(oldName, name));
       setActivePresetName(nextName);
       setMissingNotice((prev) =>
         prev && presetKey(prev.presetName) === presetKey(oldName)
@@ -293,28 +304,32 @@ export function CsvImport({
     } catch (e) {
       setPresetError((e as Error).message);
       setPresetStatus("");
+    } finally {
+      setPresetBusy(false);
     }
   }
 
-  function handleDeletePreset() {
-    if (!activePreset) return;
+  async function handleDeletePreset() {
+    if (!activePreset || presetBusy) return;
     const targetName = activePreset.name;
     if (
       !window.confirm(`Delete preset "${targetName}"? This cannot be undone.`)
     )
       return;
-    const result = deletePreset(getBrowserStorage(), targetName);
-    if (!result.persisted) {
-      setPresetError(STORAGE_WRITE_ERROR);
+    setPresetBusy(true);
+    try {
+      setPresets(await presetStore.remove(targetName));
+      setActivePresetName("");
+      setMissingNotice(null);
+      setRenaming(false);
+      setPresetError("");
+      setPresetStatus(`Deleted preset "${targetName}".`);
+    } catch (e) {
+      setPresetError((e as Error).message);
       setPresetStatus("");
-      return;
+    } finally {
+      setPresetBusy(false);
     }
-    setPresets(result.presets);
-    setActivePresetName("");
-    setMissingNotice(null);
-    setRenaming(false);
-    setPresetError("");
-    setPresetStatus(`Deleted preset "${targetName}".`);
   }
 
   const missingByName = new Map<string, string>();
@@ -528,115 +543,139 @@ export function CsvImport({
         </p>
         <fieldset disabled={busy || done || reading}>
           <div className="csv-presets">
-            {suggestedPreset && (
-              <div role="status" className="notice csv-preset-banner">
-                <span>
-                  Matching preset found: <b>{suggestedPreset.name}</b>
-                </span>
-                <div className="csv-category-actions">
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => {
-                      applyPreset(suggestedPreset, text);
-                      setSuggestionDismissed(true);
-                    }}
-                  >
-                    Apply
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => setSuggestionDismissed(true)}
-                  >
-                    Dismiss
-                  </button>
+            <fieldset disabled={presetBusy || !presetsReady}>
+              {suggestedPreset && (
+                <div role="status" className="notice csv-preset-banner">
+                  <span>
+                    Matching preset found: <b>{suggestedPreset.name}</b>
+                  </span>
+                  <div className="csv-category-actions">
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => {
+                        applyPreset(suggestedPreset, text);
+                        setSuggestionDismissed(true);
+                      }}
+                    >
+                      Apply
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setSuggestionDismissed(true)}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
-            <div className="csv-preset-row">
-              <label>
-                Mapping preset
-                <select
-                  value={activePreset?.name ?? ""}
-                  onChange={(e) => selectPreset(e.target.value)}
-                >
-                  <option value="">No preset</option>
-                  {presets.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {activePreset && !renaming && (
-                <>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => {
-                      setRenaming(true);
-                      setPresetError("");
-                      setPresetStatus("");
-                    }}
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={handleDeletePreset}
-                  >
-                    Delete
-                  </button>
-                </>
               )}
-            </div>
-            {activePreset && renaming && (
-              <PresetNameRow
-                label="New preset name"
-                initial={activePreset.name}
-                submitLabel={() => "Save name"}
-                submitClass="primary"
-                onSubmit={handleRenamePreset}
-                onEdit={() => {
-                  if (presetError) setPresetError("");
-                }}
-              >
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    setRenaming(false);
-                    setPresetError("");
+              <div className="csv-preset-row">
+                <label>
+                  Mapping preset
+                  <select
+                    value={activePreset?.name ?? ""}
+                    onChange={(e) => selectPreset(e.target.value)}
+                  >
+                    <option value="">
+                      {presetsState === "loading"
+                        ? "Loading presets…"
+                        : "No preset"}
+                    </option>
+                    {presets.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {activePreset && !renaming && (
+                  <>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setRenaming(true);
+                        setPresetError("");
+                        setPresetStatus("");
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={handleDeletePreset}
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
+              </div>
+              {activePreset && renaming && (
+                <PresetNameRow
+                  label="New preset name"
+                  initial={activePreset.name}
+                  submitLabel={() => "Save name"}
+                  submitClass="primary"
+                  onSubmit={handleRenamePreset}
+                  onEdit={() => {
+                    if (presetError) setPresetError("");
                   }}
                 >
-                  Cancel
-                </button>
-              </PresetNameRow>
-            )}
-            {canSavePreset && (
-              <PresetNameRow
-                label="Preset name"
-                initial={activePresetName}
-                placeholder="e.g. Emirates NBD"
-                submitLabel={(name) => {
-                  const match = name.trim()
-                    ? presets.find((p) => presetKey(p.name) === presetKey(name))
-                    : undefined;
-                  return match ? `Replace "${match.name}"` : "Save preset";
-                }}
-                submitClass="secondary"
-                onSubmit={handleSavePreset}
-                onEdit={() => {
-                  if (presetError) setPresetError("");
-                }}
-              />
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setRenaming(false);
+                      setPresetError("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </PresetNameRow>
+              )}
+              {canSavePreset && (
+                <PresetNameRow
+                  label="Preset name"
+                  initial={activePresetName}
+                  placeholder="e.g. Emirates NBD"
+                  submitLabel={(name) => {
+                    const match = name.trim()
+                      ? presets.find(
+                          (p) => presetKey(p.name) === presetKey(name),
+                        )
+                      : undefined;
+                    return match ? `Replace "${match.name}"` : "Save preset";
+                  }}
+                  submitClass="secondary"
+                  onSubmit={handleSavePreset}
+                  onEdit={() => {
+                    if (presetError) setPresetError("");
+                  }}
+                />
+              )}
+            </fieldset>
+            {presetsReady && (
+              <p className="muted small csv-preset-scope">
+                {presetScope === "account"
+                  ? "Presets are saved to your account and available on every device."
+                  : "Presets are saved in this browser only."}
+              </p>
             )}
             {presetError && (
               <p role="alert" className="error">
                 {presetError}
               </p>
+            )}
+            {presetsState === "failed" && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={loadPresetList}
+              >
+                Retry loading presets
+              </button>
             )}
             {presetStatus && (
               <p role="status" className="muted small">

@@ -21,7 +21,14 @@ export type Table =
   | "recurring"
   | "recurring_occurrences"
   | "recurring_prefs"
+  | "csv_presets"
   | "budgets";
+export interface CsvPresetRecord {
+  id: string;
+  name: string;
+  name_key: string;
+  config: unknown;
+}
 type SavedRecurringPreferences = RecurringPreferences & { id: string };
 type RecordTypes = {
   accounts: Account;
@@ -30,6 +37,7 @@ type RecordTypes = {
   recurring: RecurringSchedule;
   recurring_occurrences: RecurringOccurrenceRecord;
   recurring_prefs: SavedRecurringPreferences;
+  csv_presets: CsvPresetRecord;
   budgets: Budget;
 };
 export const IMPORT_BATCH_SIZE = 100;
@@ -310,6 +318,10 @@ export class PocketBaseBackend {
         return [];
       throw e;
     }
+  }
+  async listCsvPresets(): Promise<CsvPresetRecord[]> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.rows<CsvPresetRecord>("csv_presets");
   }
   async load(): Promise<Ledger> {
     if (!this.session) throw new Error("Please sign in.");

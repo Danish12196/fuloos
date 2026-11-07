@@ -816,3 +816,34 @@ test("PocketBase budget saves send empty end_month and return normalized budgets
     end_month: null,
   });
 });
+
+test("CSV presets are listed and saved in the per-user presets collection", async () => {
+  const f = fixture();
+  await assert.rejects(f.backend.listCsvPresets(), /sign in/);
+  f.queue.push(
+    json(auth),
+    json({
+      items: [{ id: "p1", name: "ADCB", name_key: "adcb", config: {} }],
+      totalPages: 1,
+    }),
+    json({ id: "p2", name: "FAB", name_key: "fab", config: {} }),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const list = await f.backend.listCsvPresets();
+  assert.equal(list[0].id, "p1");
+  assert.match(
+    f.calls[1].url,
+    /\/api\/collections\/fuloos_csv_presets\/records\?page=1/,
+  );
+  await f.backend.save("csv_presets", {
+    name: "FAB",
+    name_key: "fab",
+    config: { delimiter: "," },
+    user_id: "spoof",
+  });
+  assert.equal(
+    f.calls[2].url,
+    "https://pb.example.test/api/collections/fuloos_csv_presets/records",
+  );
+  assert.equal(JSON.parse(String(f.calls[2].init.body)).user_id, "user-a");
+});
