@@ -68,6 +68,7 @@ import {
   buildIntelligentForecast,
   detectRecurringPatterns,
   reconcileTransactions,
+  transactionLabel,
   type DetectedPattern,
   type ForecastItem,
   type IntelligentForecast,
@@ -88,7 +89,7 @@ export const statusLabels: Record<SchedulePaymentStatus, string> = {
   upcoming: "Upcoming",
   paid: "Paid",
   paused: "Paused",
-  completed: "Completed",
+  completed: "Ended",
 };
 
 export function formatShortDate(date: string) {
@@ -144,7 +145,8 @@ export function DashboardRecurring({
     [ledger, asOf],
   );
   const detected = useMemo(
-    () => detectRecurringPatterns(ledger, { asOfDate: asOf }),
+    () =>
+      detectRecurringPatterns(ledger, { asOfDate: asOf, includeEnded: false }),
     [ledger, asOf],
   );
   const reconciliation = useMemo(
@@ -522,7 +524,9 @@ export function RecurringPage({
   const counts = useMemo(
     () => ({
       all: summaries.length,
-      active: summaries.filter((s) => s.schedule.status === "active").length,
+      active: summaries.filter(
+        (s) => s.schedule.status === "active" && s.paymentStatus !== "completed",
+      ).length,
       overdue: summaries.filter((s) => s.paymentStatus === "overdue").length,
       paused: summaries.filter((s) => s.schedule.status === "paused").length,
     }),
@@ -533,7 +537,11 @@ export function RecurringPage({
     const q = search.trim().toLowerCase();
     return summaries
       .filter((item) => {
-        if (statusFilter === "active" && item.schedule.status !== "active")
+        if (
+          statusFilter === "active" &&
+          (item.schedule.status !== "active" ||
+            item.paymentStatus === "completed")
+        )
           return false;
         if (statusFilter === "paused" && item.schedule.status !== "paused")
           return false;
@@ -625,8 +633,149 @@ export function RecurringPage({
     dismissed_keys: [],
   };
 
+  const activePatterns = detectedPatterns.filter((p) => p.status === "active");
+  const pastPatterns = detectedPatterns.filter((p) => p.status === "ended");
+
+  const renderPatternCard = (pattern: DetectedPattern) => {
+    const isExpanded = expandedPattern === pattern.patternKey;
+    const cat = ledger.categories.find(
+      (c) => c.id === pattern.categoryId,
+    );
+    const acc = ledger.accounts.find(
+      (a) => a.id === pattern.accountId,
+    );
+    return (
+      <article
+        className="suggestion-card"
+        key={pattern.patternKey}
+      >
+        <div className="card-top">
+          <span className="card-kind-badge">
+            <Sparkles size={14} />
+            {pattern.categoryHint}
+          </span>
+          <span
+            className={`confidence-pill ${pattern.confidenceTier}`}
+          >
+            {Math.round(pattern.confidence * 100)}%{" "}
+            {pattern.confidenceTier === "high"
+              ? "High"
+              : "Medium"}{" "}
+            confidence
+          </span>
+        </div>
+
+        <div className="card-main">
+          <div className="card-heading-row">
+            <div>
+              <h4>{pattern.displayName}</h4>
+              <p className="card-subtitle">
+                {frequencyLabels[pattern.frequency]} ·{" "}
+                {pattern.type} · {acc?.name ?? "Account"}{" "}
+                {cat ? `· ${cat.name}` : ""}
+              </p>
+              {pattern.status === "ended" && (
+                <p className="card-subtitle">
+                  Ended · paid {formatFullDate(pattern.firstDate)} –{" "}
+                  {formatFullDate(pattern.lastDate)}
+                </p>
+              )}
+            </div>
+            <div className="card-amount">
+              <b>
+                {pattern.amountType === "variable" ? "~" : ""}
+                {money(pattern.estimatedAmount)}
+              </b>
+              <small>
+                {pattern.amountType === "variable"
+                  ? `Range ${money(pattern.minAmount)} – ${money(pattern.maxAmount)}`
+                  : "Consistent amount"}
+              </small>
+            </div>
+          </div>
+
+          <div className="pattern-explanation-box">
+            <Info size={14} />
+            <span>{pattern.explanation}</span>
+          </div>
+
+          <div className="supporting-disclosure">
+            <button
+              type="button"
+              className="text-button small disclosure-btn"
+              onClick={() =>
+                setExpandedPattern(
+                  isExpanded ? null : pattern.patternKey,
+                )
+              }
+            >
+              {isExpanded ? "Hide" : "View"}{" "}
+              {pattern.supportingTransactions.length} supporting
+              transactions
+              <ChevronDown
+                size={14}
+                style={{
+                  transform: isExpanded
+                    ? "rotate(180deg)"
+                    : "none",
+                }}
+              />
+            </button>
+
+            {isExpanded && (
+              <div className="supporting-list">
+                {pattern.supportingTransactions.map((tx) => (
+                  <div
+                    className="supporting-row"
+                    key={tx.id}
+                  >
+                    <span>{formatShortDate(tx.date)}</span>
+                    <span className="supporting-payee">
+                      {transactionLabel(tx)}
+                    </span>
+                    <b>{money(tx.amount)}</b>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card-actions">
+          <button
+            type="button"
+            className="secondary compact-btn"
+            disabled={busy}
+            onClick={() =>
+              onDismissPattern?.(pattern.patternKey)
+            }
+          >
+            Dismiss
+          </button>
+          <button
+            type="button"
+            className="secondary compact-btn"
+            disabled={busy}
+            onClick={() => onEditPattern?.(pattern)}
+          >
+            <Pencil size={13} /> Edit &amp; create
+          </button>
+          <button
+            type="button"
+            className="primary compact-btn"
+            disabled={busy}
+            onClick={() => onAcceptPattern?.(pattern)}
+          >
+            <Check size={14} />{" "}
+            {pattern.status === "ended" ? "Add to history" : "Accept & schedule"}
+          </button>
+        </div>
+      </article>
+    );
+  };
+
   const suggestionsBadgeCount =
-    detectedPatterns.length + reconciliation.reviewCandidates.length;
+    activePatterns.length + reconciliation.reviewCandidates.length;
 
   return (
     <>
@@ -1183,7 +1332,7 @@ export function RecurringPage({
                           <span className="preview-label">
                             Bank transaction:
                           </span>
-                          <b>{candidate.transaction.payee}</b>
+                          <b>{transactionLabel(candidate.transaction)}</b>
                           <span>
                             {formatShortDate(candidate.transaction.date)} ·{" "}
                             {money(candidate.transaction.amount)}
@@ -1233,7 +1382,7 @@ export function RecurringPage({
             <div className="sub-block-heading">
               <span className="eyebrow green">UNSCHEDULED RECURRING PATTERNS</span>
               <h3>
-                Discovered from your history ({detectedPatterns.length})
+                Discovered from your history ({activePatterns.length})
               </h3>
               <p>
                 Deterministic frequency analysis over your historical
@@ -1241,138 +1390,9 @@ export function RecurringPage({
               </p>
             </div>
 
-            {detectedPatterns.length ? (
+            {activePatterns.length ? (
               <div className="suggestion-cards-grid">
-                {detectedPatterns.map((pattern) => {
-                  const isExpanded = expandedPattern === pattern.patternKey;
-                  const cat = ledger.categories.find(
-                    (c) => c.id === pattern.categoryId,
-                  );
-                  const acc = ledger.accounts.find(
-                    (a) => a.id === pattern.accountId,
-                  );
-                  return (
-                    <article
-                      className="suggestion-card"
-                      key={pattern.patternKey}
-                    >
-                      <div className="card-top">
-                        <span className="card-kind-badge">
-                          <Sparkles size={14} />
-                          {pattern.categoryHint}
-                        </span>
-                        <span
-                          className={`confidence-pill ${pattern.confidenceTier}`}
-                        >
-                          {Math.round(pattern.confidence * 100)}%{" "}
-                          {pattern.confidenceTier === "high"
-                            ? "High"
-                            : "Medium"}{" "}
-                          confidence
-                        </span>
-                      </div>
-
-                      <div className="card-main">
-                        <div className="card-heading-row">
-                          <div>
-                            <h4>{pattern.displayName}</h4>
-                            <p className="card-subtitle">
-                              {frequencyLabels[pattern.frequency]} ·{" "}
-                              {pattern.type} · {acc?.name ?? "Account"}{" "}
-                              {cat ? `· ${cat.name}` : ""}
-                            </p>
-                          </div>
-                          <div className="card-amount">
-                            <b>
-                              {pattern.amountType === "variable" ? "~" : ""}
-                              {money(pattern.estimatedAmount)}
-                            </b>
-                            <small>
-                              {pattern.amountType === "variable"
-                                ? `Range ${money(pattern.minAmount)} – ${money(pattern.maxAmount)}`
-                                : "Consistent amount"}
-                            </small>
-                          </div>
-                        </div>
-
-                        <div className="pattern-explanation-box">
-                          <Info size={14} />
-                          <span>{pattern.explanation}</span>
-                        </div>
-
-                        <div className="supporting-disclosure">
-                          <button
-                            type="button"
-                            className="text-button small disclosure-btn"
-                            onClick={() =>
-                              setExpandedPattern(
-                                isExpanded ? null : pattern.patternKey,
-                              )
-                            }
-                          >
-                            {isExpanded ? "Hide" : "View"}{" "}
-                            {pattern.supportingTransactions.length} supporting
-                            transactions
-                            <ChevronDown
-                              size={14}
-                              style={{
-                                transform: isExpanded
-                                  ? "rotate(180deg)"
-                                  : "none",
-                              }}
-                            />
-                          </button>
-
-                          {isExpanded && (
-                            <div className="supporting-list">
-                              {pattern.supportingTransactions.map((tx) => (
-                                <div
-                                  className="supporting-row"
-                                  key={tx.id}
-                                >
-                                  <span>{formatShortDate(tx.date)}</span>
-                                  <span className="supporting-payee">
-                                    {tx.payee}
-                                  </span>
-                                  <b>{money(tx.amount)}</b>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="card-actions">
-                        <button
-                          type="button"
-                          className="secondary compact-btn"
-                          disabled={busy}
-                          onClick={() =>
-                            onDismissPattern?.(pattern.patternKey)
-                          }
-                        >
-                          Dismiss
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary compact-btn"
-                          disabled={busy}
-                          onClick={() => onEditPattern?.(pattern)}
-                        >
-                          <Pencil size={13} /> Edit &amp; create
-                        </button>
-                        <button
-                          type="button"
-                          className="primary compact-btn"
-                          disabled={busy}
-                          onClick={() => onAcceptPattern?.(pattern)}
-                        >
-                          <Check size={14} /> Accept &amp; schedule
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
+                {activePatterns.map(renderPatternCard)}
               </div>
             ) : (
               <div className="empty">
@@ -1386,6 +1406,23 @@ export function RecurringPage({
               </div>
             )}
           </div>
+
+          {pastPatterns.length > 0 && (
+            <div className="detected-patterns-block">
+              <div className="sub-block-heading">
+                <span className="eyebrow">PAST RECURRING PAYMENTS</span>
+                <h3>Stopped series ({pastPatterns.length})</h3>
+                <p>
+                  Subscriptions, instalments and bills that used to repeat but
+                  have stopped. Adding one keeps it as an ended schedule with
+                  its payments linked, without any future due dates.
+                </p>
+              </div>
+              <div className="suggestion-cards-grid">
+                {pastPatterns.map(renderPatternCard)}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
