@@ -2404,13 +2404,7 @@ export function ConfirmOccurrenceModal({
     occurrenceDate,
   ]);
 
-  const defaultAccount = ledger.accounts.find(
-    (a) => a.id === schedule.account_id,
-  );
-  const defaultTxDate =
-    defaultAccount && occurrenceDate < defaultAccount.opening_date
-      ? defaultAccount.opening_date
-      : occurrenceDate;
+  const defaultTxDate = occurrenceDate;
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();

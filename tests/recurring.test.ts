@@ -487,7 +487,7 @@ test("buildConfirmTransaction sets defaults, enforces variable amounts and valid
   assert.equal(txOverridden.category_id, null);
   assert.equal(txOverridden.account_id, "acc-savings");
 
-  // Account opening date boundary: occurrence before account opening date clamps to opening_date
+  // An occurrence before the account's balance date keeps its own date
   const lateAccount: Account = {
     id: "acc-late",
     name: "New Account",
@@ -506,15 +506,12 @@ test("buildConfirmTransaction sets defaults, enforces variable amounts and valid
   ledger.recurring.push(earlySchedule);
 
   const clampedTx = buildConfirmTransaction(earlySchedule, "2026-01-15", ledger);
-  assert.equal(clampedTx.date, "2026-02-01"); // Clamped to account opening_date
-
-  // Explicit override before opening_date fails validation
-  assert.throws(
-    () =>
-      buildConfirmTransaction(earlySchedule, "2026-01-15", ledger, {
-        date: "2026-01-20",
-      }),
-    /Transaction cannot be before the account opening date/,
+  assert.equal(clampedTx.date, "2026-01-15");
+  assert.equal(
+    buildConfirmTransaction(earlySchedule, "2026-01-15", ledger, {
+      date: "2026-01-20",
+    }).date,
+    "2026-01-20",
   );
 });
 

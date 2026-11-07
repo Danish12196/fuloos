@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   balance,
+  balanceAsOfDate,
+  hasBalanceAnchor,
   minor,
+  NO_BALANCE_DATE,
+  openingDateFor,
+  startingBalance,
   totals,
   validateTransaction,
   type Account,
@@ -72,8 +77,8 @@ test("transfer validation rejects self transfers, missing destinations and categ
   );
   assert.throws(() => validateTransaction({ ...t, category_id: "x" }, ledger));
 });
-test("pre-opening dates are rejected and categories work for both income and expenses", () => {
-  assert.throws(() =>
+test("dates before the balance date are allowed and categories work for both income and expenses", () => {
+  assert.doesNotThrow(() =>
     validateTransaction({ ...t, date: "2025-12-31" }, ledger),
   );
   const withCategory = {
@@ -97,4 +102,59 @@ test("pre-opening dates are rejected and categories work for both income and exp
     );
   }
   assert.throws(() => validateTransaction({ ...t, amount: 1.2 }, ledger));
+});
+
+test("a balance as of a date ignores earlier transactions for today's balance and back-fills history", () => {
+  // Bank showed 1,000.00 at the end of 2026-03-31.
+  const acct: Account = {
+    ...a,
+    opening_balance: 100000,
+    opening_date: openingDateFor("2026-03-31"),
+  };
+  assert.equal(acct.opening_date, "2026-04-01");
+  assert.equal(balanceAsOfDate(acct), "2026-03-31");
+  const tx = (date: string, type: "income" | "expense", amount: number) => ({
+    ...t,
+    id: date + type,
+    type,
+    amount,
+    to_account_id: null,
+    date,
+  });
+  const before = [
+    tx("2026-03-31", "expense", 5000),
+    tx("2026-02-10", "income", 20000),
+  ];
+  const after = [tx("2026-04-01", "expense", 2500)];
+  // Past transactions are already part of the stated balance.
+  assert.equal(balance(acct, before), 100000);
+  assert.equal(balance(acct, [...before, ...after]), 97500);
+  // History before the date is worked backwards from it.
+  assert.equal(startingBalance(acct, before), 100000 + 5000 - 20000);
+  // A transfer from another account before the date only shifts history too.
+  const transfer = {
+    ...t,
+    account_id: "b",
+    to_account_id: "a",
+    date: "2026-01-05",
+  };
+  assert.equal(balance(acct, [transfer]), 100000);
+  assert.equal(startingBalance(acct, [transfer]), 100000 - 10000);
+  assert.equal(hasBalanceAnchor(acct), true);
+});
+test("an account with no balance set is just the sum of its transactions", () => {
+  const acct: Account = {
+    ...a,
+    opening_balance: 0,
+    opening_date: NO_BALANCE_DATE,
+  };
+  assert.equal(hasBalanceAnchor(acct), false);
+  const income = {
+    ...t,
+    type: "income" as const,
+    to_account_id: null,
+    date: "1999-05-01",
+  };
+  assert.equal(balance(acct, [income]), 10000);
+  assert.equal(startingBalance(acct, [income]), 0);
 });

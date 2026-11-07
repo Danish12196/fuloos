@@ -63,7 +63,7 @@ test("amount parsing preserves fils and validates grouping", () => {
   assert.throws(() => csvAmount("1,23", "."));
   assert.throws(() => csvAmount("1.234", "."));
 });
-test("preview flags duplicates, invalid dates and pre-opening transactions", () => {
+test("preview flags duplicates and invalid dates, and accepts transactions before the balance date", () => {
   const rows = [
     ["01/02/2026", "SHOP", "-20"],
     ["01/02/2026", "shop", "-20"],
@@ -74,7 +74,8 @@ test("preview flags duplicates, invalid dates and pre-opening transactions", () 
   assert.equal(result[0].transaction?.amount, 2000);
   assert.equal(result[1].duplicate, true);
   assert.ok(result[2].error);
-  assert.ok(result[3].error);
+  assert.equal(result[3].error, "");
+  assert.equal(result[3].transaction?.date, "2019-01-01");
   const existing = {
     ...ledger,
     transactions: [{ ...result[0].transaction!, id: "t" }],

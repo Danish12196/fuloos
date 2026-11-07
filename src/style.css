@@ -3647,6 +3647,136 @@ button {
     transition: none;
   }
 }
+.emoji-picker {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+.emoji-current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.emoji-preview {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft-surface);
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+.emoji-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.emoji-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft-surface);
+  color: var(--muted);
+}
+.emoji-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 9px 0;
+}
+.emoji-search input:focus {
+  outline: none;
+}
+.emoji-search:focus-within {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+.emoji-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.emoji-tabs button {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.emoji-tabs button:hover {
+  background: var(--hover-surface);
+}
+.emoji-tabs button[aria-selected="true"] {
+  background: var(--active-surface);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+.emoji-heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.emoji-grid button {
+  height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.emoji-grid button:hover {
+  background: var(--hover-surface);
+}
+.emoji-grid button[aria-pressed="true"] {
+  background: var(--active-surface);
+  outline: 2px solid var(--brand);
+}
+.emoji-custom {
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.emoji-custom input {
+  max-width: 140px;
+}
+.emoji-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+.emoji-label > .muted {
+  font-weight: 400;
+  font-size: 12px;
+}
+.modal label.emoji-custom {
+  margin-bottom: 0;
+  font-weight: 500;
+  font-size: 13px;
+}
 
 /* Categories: multi-select and bulk delete */
 .category-toolbar {

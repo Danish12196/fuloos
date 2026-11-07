@@ -23,6 +23,8 @@ The web app builds to `dist/` for Vercel. Your persistent PocketBase instance at
 - `pocketbase/pb_migrations/1793881800_recurring.js` — recurring schedules (`fuloos_recurring`) and confirmed occurrence links (`fuloos_recurring_occurrences`).
 - `pocketbase/pb_migrations/1793968200_recurring_automation.js` — quarterly frequency, match provenance on occurrences, and automation preferences (`fuloos_recurring_prefs`).
 - `pocketbase/pb_migrations/1794141000_budgets.js` — monthly per-category budgets (`fuloos_budgets`).
+- `pocketbase/pb_migrations/1794227400_lockdown.js` — account self-delete and the AI suggestion collections.
+- `pocketbase/pb_migrations/1794313800_balance_as_of.js` — trigger-only: transactions may be dated before an account's balance date.
 
 Set `VITE_POCKETBASE_URL` as a build environment variable after backend setup. No superuser key or service credential belongs in browser code. User sessions are stored in localStorage, refreshed on app startup and removed on signout; restrict frontend script sources and avoid untrusted scripts. Signing out clears the current browser session; PocketBase tokens remain valid until expiry or server-side invalidation.
 

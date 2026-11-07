@@ -93,9 +93,10 @@ test("bulk edits preserve untouched fields, support clearing and appending notes
     () => editTransaction(income, { category_id: "missing" }, ledger),
     /existing category/,
   );
-  assert.throws(
-    () => editTransaction(income, { date: "2025-12-31" }, ledger),
-    /opening date/,
+  // Dates before the account's balance date are allowed.
+  assert.equal(
+    editTransaction(income, { date: "2025-12-31" }, ledger).date,
+    "2025-12-31",
   );
   assert.throws(
     () =>

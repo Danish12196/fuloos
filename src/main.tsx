@@ -81,7 +81,13 @@ import {
 } from "lucide-react";
 import {
   balance,
+  balanceAsOfDate,
   emptyLedger,
+  hasBalanceAnchor,
+  isIsoCalendarDate,
+  NO_BALANCE_DATE,
+  openingDateFor,
+  startingBalance,
   errorMessage,
   minor,
   money,
@@ -1354,6 +1360,16 @@ function App() {
       (s, a) => s + balance(a, ledger.transactions),
       0,
     );
+  const balanceNote = (a: Account, short = false) =>
+    hasBalanceAnchor(a)
+      ? `${concealed(a.opening_balance)}${short ? " · " : " at end of "}${new Date(
+          balanceAsOfDate(a) + "T12:00:00Z",
+        ).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })}`
+      : "Sum of transactions";
   const categoryCounts = new Map<string, number>();
   for (const t of ledger.transactions)
     if (t.category_id)
@@ -1968,7 +1984,7 @@ function App() {
                 <strong>{concealed(net)}</strong>
                 <small>
                   Credit card debt is shown as a negative balance. Enter a
-                  negative opening balance for amounts you owe.
+                  negative balance for amounts you owe.
                 </small>
               </div>
               {density === "compact" ? (
@@ -1976,7 +1992,7 @@ function App() {
                   <div className="compact-head accounts" aria-hidden>
                     <span>Account</span>
                     <span>Type</span>
-                    <span>Opening</span>
+                    <span>Balance set</span>
                     <span className="num">Balance</span>
                     <span />
                   </div>
@@ -2004,9 +2020,7 @@ function App() {
                           <b>{a.name}</b>
                         </button>
                         <span className="muted">{types[a.type]}</span>
-                        <span className="muted">
-                          {concealed(a.opening_balance)} · {a.opening_date}
-                        </span>
+                        <span className="muted">{balanceNote(a, true)}</span>
                         <strong
                           className={`num ${value < 0 ? "is-negative" : ""}`}
                         >
@@ -2077,10 +2091,7 @@ function App() {
                       <strong className="large-amount">
                         {concealed(balance(a, ledger.transactions))}
                       </strong>
-                      <p className="muted small">
-                        Opening: {concealed(a.opening_balance)} ·{" "}
-                        {a.opening_date}
-                      </p>
+                      <p className="muted small">{balanceNote(a)}</p>
                       <button
                         className="text-button"
                         onClick={() => {
@@ -2445,7 +2456,10 @@ function TransactionList({
   const balances = useMemo(() => {
     const result = new Map<string, { source: number; destination: number }>();
     const running = new Map(
-      ledger.accounts.map((a) => [a.id, a.opening_balance]),
+      ledger.accounts.map((a) => [
+        a.id,
+        startingBalance(a, ledger.transactions),
+      ]),
     );
     // IDs provide a consistent order where only a transaction date is available.
     for (const t of [...ledger.transactions].sort(
@@ -2861,26 +2875,20 @@ function Editor({
       s = (key: string) => String(f.get(key) ?? "").trim();
     try {
       if (modal.kind === "account") {
+        const balanceText = s("balance");
+        const asOf = s("balance_as_of") || today();
+        if (balanceText && !isIsoCalendarDate(asOf))
+          throw new Error("Choose a valid date for the balance.");
         const value = {
           name: s("name"),
           type: s("type"),
-          opening_balance: minor(s("opening_balance")),
-          opening_date: s("opening_date"),
+          // No balance given: the balance is just the sum of transactions.
+          opening_balance: balanceText ? minor(balanceText) : 0,
+          opening_date: balanceText ? openingDateFor(asOf) : NO_BALANCE_DATE,
           color: s("color"),
           emoji: s("emoji"),
         };
         if (!value.name) throw new Error("Enter an account name.");
-        if (
-          item &&
-          ledger.transactions.some(
-            (t) =>
-              (t.account_id === item.id || t.to_account_id === item.id) &&
-              t.date < value.opening_date,
-          )
-        )
-          throw new Error(
-            "Opening date cannot be after an existing transaction.",
-          );
         await save("accounts", value, item?.id);
       } else if (modal.kind === "category") {
         const value = {
@@ -3120,32 +3128,45 @@ function Editor({
             </label>
             <div className="form-row">
               <label>
-                Opening balance (AED)
+                Balance (AED) <span className="muted">Optional</span>
                 <input
-                  required
                   inputMode="decimal"
-                  name="opening_balance"
+                  name="balance"
+                  placeholder="e.g. 12500.00"
                   defaultValue={
-                    modal.item
+                    modal.item && hasBalanceAnchor(modal.item)
                       ? (modal.item.opening_balance / 100).toFixed(2)
-                      : "0.00"
+                      : ""
                   }
                 />
               </label>
               <label>
-                As of date
+                As of end of
                 <input
-                  required
-                  name="opening_date"
+                  name="balance_as_of"
                   type="date"
-                  defaultValue={modal.item?.opening_date ?? today()}
+                  defaultValue={
+                    modal.item && hasBalanceAnchor(modal.item)
+                      ? balanceAsOfDate(modal.item)
+                      : today()
+                  }
                 />
               </label>
             </div>
             <p className="form-hint">
-              Use a negative balance for credit card debt or an overdraft.
-              Opening balances do not count as income. Phase 1 supports AED
-              accounts.
+              Enter what your bank shows at the end of a day. Transactions after
+              that day are added to it. Earlier ones are already part of it, so
+              you can add past transactions at any time without changing this
+              balance. Leave it blank to just add up your transactions. Use a
+              negative balance for credit card debt or an overdraft.
+              {modal.item && (
+                <>
+                  {" "}
+                  The app currently shows{" "}
+                  {money(balance(modal.item, ledger.transactions))} for this
+                  account.
+                </>
+              )}
             </p>
             <EmojiField defaultValue={modal.item?.emoji} />
             <ColorPicker

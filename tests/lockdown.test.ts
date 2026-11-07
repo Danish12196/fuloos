@@ -355,3 +355,50 @@ test("deleteAccount removes recurring schedules and transactions in batches befo
   );
   assert.equal(calls.length, 1);
 });
+
+test("balance-as-of migration lets transactions predate the account's balance date and keeps the other guards", async () => {
+  const { db, app, downs } = await migrateAll();
+  try {
+    seed(db, "user-a");
+    const insert = (id: string, date: string, account = "user-a-acc") =>
+      db.exec(
+        `INSERT INTO fuloos_transactions(id,user_id,type,amount,account_id,date) VALUES('${id}','user-a','expense',100,'${account}','${date}')`,
+      );
+    // The seeded account's balance date is 2026-01-01; earlier transactions now save.
+    insert("old", "2025-06-30");
+    assert.equal(count(db, "fuloos_transactions", "user-a"), 3);
+    // The balance date can move past existing transactions.
+    db.exec(
+      "UPDATE fuloos_accounts SET opening_date='2026-12-01',opening_balance=5000 WHERE id='user-a-acc'",
+    );
+    // Other checks are unchanged.
+    assert.throws(() => insert("bad-date", "2026-02-30"), /date must be valid/);
+    assert.throws(
+      () => insert("foreign", "2026-02-01", "nobody-acc"),
+      /same user/,
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          "UPDATE fuloos_accounts SET opening_date='2026-13-01' WHERE id='user-a-acc'",
+        ),
+      /Balance date must be valid/,
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          "UPDATE fuloos_accounts SET opening_balance=1.5 WHERE id='user-a-acc'",
+        ),
+      /integer fils/,
+    );
+    // Rolling back restores the old guard.
+    db.exec("DELETE FROM fuloos_transactions WHERE id='old'");
+    db.exec(
+      "UPDATE fuloos_accounts SET opening_date='2026-01-01' WHERE id='user-a-acc'",
+    );
+    downs["1794313800_balance_as_of.js"](app);
+    assert.throws(() => insert("old2", "2025-06-30"), /opening dates/);
+  } finally {
+    db.close();
+  }
+});

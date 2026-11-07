@@ -116,25 +116,64 @@ export const money = (amount: number) =>
   new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED" }).format(
     amount / 100,
   );
+/**
+ * An account's stored opening_balance is its balance at the start of
+ * opening_date, before that day's transactions. The form shows this as
+ * "balance at the end of <opening_date - 1>". Transactions on either side of
+ * that date are allowed: later ones move the balance forward, earlier ones are
+ * already part of it and only change the history before it.
+ */
+export const NO_BALANCE_DATE = "1970-01-01";
+/** True when the user gave a balance; false when it is just the sum of transactions. */
+export function hasBalanceAnchor(account: Account): boolean {
+  return !(
+    account.opening_balance === 0 && account.opening_date <= NO_BALANCE_DATE
+  );
+}
+export function addDaysIso(date: string, days: number): string {
+  const d = new Date(date + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+/** The day whose closing balance the account's anchor records. */
+export const balanceAsOfDate = (account: Account) =>
+  addDaysIso(account.opening_date, -1);
+/** Stored opening_date for a balance at the end of `asOf`. */
+export const openingDateFor = (asOf: string) => addDaysIso(asOf, 1);
+/** How much a transaction moves one account's balance, in fils. */
+export function accountDelta(t: Transaction, accountId: string): number {
+  return (
+    (t.to_account_id === accountId ? t.amount : 0) +
+    (t.account_id === accountId
+      ? t.type === "income"
+        ? t.amount
+        : -t.amount
+      : 0)
+  );
+}
+/** The account's balance before its earliest transaction. Running balances start here. */
+export function startingBalance(
+  account: Account,
+  transactions: Transaction[],
+): number {
+  return transactions.reduce(
+    (sum, t) =>
+      t.date < account.opening_date ? sum - accountDelta(t, account.id) : sum,
+    account.opening_balance,
+  );
+}
+/** The balance after every transaction, including future-dated ones. */
 export function balance(account: Account, transactions: Transaction[]): number {
   return transactions.reduce(
     (sum, t) =>
-      sum +
-      (t.to_account_id === account.id ? t.amount : 0) +
-      (t.account_id === account.id
-        ? t.type === "income"
-          ? t.amount
-          : -t.amount
-        : 0),
+      t.date >= account.opening_date ? sum + accountDelta(t, account.id) : sum,
     account.opening_balance,
   );
 }
 export function isIsoCalendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const ms = Date.parse(value + "T00:00:00Z");
-  return (
-    !Number.isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === value
-  );
+  return !Number.isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === value;
 }
 export function validateTransaction(
   t: Omit<Transaction, "id"> & { id?: string },
@@ -151,16 +190,10 @@ export function validateTransaction(
   const source = ledger.accounts.find((a) => a.id === t.account_id);
   if (!source) throw new Error("Select an account.");
   if (!isIsoCalendarDate(t.date)) throw new Error("Choose a valid date.");
-  if (t.date < source.opening_date)
-    throw new Error("Transaction cannot be before the account opening date.");
   if (t.type === "transfer") {
     const target = ledger.accounts.find((a) => a.id === t.to_account_id);
     if (!target || target.id === source.id)
       throw new Error("Choose two different accounts.");
-    if (t.date < target.opening_date)
-      throw new Error(
-        "Transaction cannot be before the receiving account opening date.",
-      );
     if (t.category_id) throw new Error("Transfers do not have a category.");
   } else {
     if (t.to_account_id)

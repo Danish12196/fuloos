@@ -1,3 +1,4 @@
+import { startingBalance } from "./domain.ts";
 import type { Kind, Ledger, Transaction } from "./domain.ts";
 
 /**
@@ -32,7 +33,7 @@ export function buildRegister(ledger: Ledger, accountId = ""): RegisterEntry[] {
   const inScope = (id: string) => !accountId || id === accountId;
   let running = ledger.accounts
     .filter((a) => inScope(a.id))
-    .reduce((sum, a) => sum + a.opening_balance, 0);
+    .reduce((sum, a) => sum + startingBalance(a, ledger.transactions), 0);
   const ordered = [...ledger.transactions].sort(
     (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
   );

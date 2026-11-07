@@ -33,6 +33,7 @@ Omit `--signup` to reuse an existing test user, or omit the credentials to run o
    - `1794054600_csv_presets.js` — creates `fuloos_csv_presets` so CSV column-mapping presets are stored per user and follow them across devices.
    - `1794141000_budgets.js` — creates `fuloos_budgets` (monthly per-category limits) with per-user ownership rules and integrity triggers.
    - `1794227400_lockdown.js` — lets users delete their own account, and creates the owner-only `fuloos_ml_settings` and `fuloos_ml_examples` collections for AI suggestions.
+   - `1794313800_balance_as_of.js` — trigger-only, no field changes. An account's `opening_balance`/`opening_date` now means "balance as of a date", so transactions may be dated before it and the date may move past existing transactions. All other ledger checks are unchanged.
 3. Run `./pocketbase migrate up` using the instance's existing data and migrations paths, then restart PocketBase. Alternatively, the standard server applies pending migrations on startup. Use the existing container/service's normal deployment process, rather than starting a second instance over the same database.
 4. Keep HTTPS enabled. If the server restricts allowed origins, allow the exact Vercel production origin and localhost development origin. Do not put administrator tokens into Vercel frontend variables.
 5. Set `VITE_POCKETBASE_URL=https://pb.danishali.dev` as a **build** environment variable, then rebuild/redeploy the frontend. Without it, Fuloos remains an explicitly labeled in-memory demo.
