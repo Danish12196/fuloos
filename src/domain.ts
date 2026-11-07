@@ -66,6 +66,13 @@ export interface RecurringOccurrenceRecord {
   match_source?: OccurrenceMatchSource;
   match_reason?: string;
 }
+export interface Budget {
+  id: string;
+  category_id: string;
+  amount: number;
+  start_month: string;
+  end_month: string | null;
+}
 export interface RecurringPreferences {
   id?: string;
   auto_detect: AutoDetectSetting;
@@ -84,6 +91,7 @@ export interface Ledger {
   recurring?: RecurringSchedule[];
   recurring_occurrences?: RecurringOccurrenceRecord[];
   recurring_prefs?: RecurringPreferences;
+  budgets?: Budget[];
 }
 export const emptyLedger: Ledger = {
   accounts: [],
@@ -92,6 +100,7 @@ export const emptyLedger: Ledger = {
   recurring: [],
   recurring_occurrences: [],
   recurring_prefs: defaultRecurringPreferences,
+  budgets: [],
 };
 export function minor(value: string): number {
   if (!/^-?\d+(\.\d{1,2})?$/.test(value.trim()))
