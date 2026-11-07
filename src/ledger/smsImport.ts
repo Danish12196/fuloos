@@ -32,6 +32,8 @@ export interface SmsPreviewRow {
   dateSource: "sms" | "backup" | "fallback" | null;
   suggestion: CategorySuggestion | null;
   duplicate: boolean;
+  /** The same SMS (same bank, text and received date) appeared earlier in this batch. */
+  repeated: boolean;
   /** Rows the user would normally not import (OTPs, internal moves, card repayments). */
   skipped: string;
   error: string;
@@ -77,14 +79,13 @@ export function previewSms(
   model: LoadedModel | null,
   map: CategoryMap,
 ): SmsPreviewRow[] {
-  const seen = new Set(ledger.transactions.map(transactionKey));
   const seenText = new Set<string>();
   const batchBank =
     options.bank ??
     detectBank(
       messages.filter((m) => !bankFromSender(m.sender)).map((m) => m.message),
     );
-  return messages.map((raw, index) => {
+  const rows = messages.map((raw, index) => {
     const row: SmsPreviewRow = {
       index,
       display: maskForDisplay(raw.message),
@@ -93,6 +94,7 @@ export function previewSms(
       dateSource: null,
       suggestion: null,
       duplicate: false,
+      repeated: false,
       skipped: "",
       error: "",
     };
@@ -103,8 +105,8 @@ export function previewSms(
         bankForMessage(raw.message, batchBank);
       const parsed = parseSms(raw.message, bank);
       row.parsed = parsed;
-      const textKey = `${bank}\u0001${raw.message.trim()}`;
-      const repeatedSms = seenText.has(textKey);
+      const textKey = `${bank}\u0001${raw.date ?? ""}\u0001${raw.message.trim()}`;
+      row.repeated = seenText.has(textKey);
       seenText.add(textKey);
       if (SKIP[parsed.txn_type]) {
         row.skipped = SKIP[parsed.txn_type]!;
@@ -157,13 +159,26 @@ export function previewSms(
         notes: `From ${bank ?? "bank"} SMS${foreign}`,
       };
       validateTransaction(transaction, ledger);
-      const key = transactionKey(transaction);
-      row.duplicate = repeatedSms || seen.has(key);
-      seen.add(key);
       row.transaction = transaction;
     } catch (e) {
       row.error = e instanceof Error ? e.message : "Could not read this SMS.";
     }
     return row;
+  });
+  return markDuplicates(rows, ledger);
+}
+
+/** Flag rows that match the ledger or an earlier row (account, date, type, amount, payee). Run again after edits. */
+export function markDuplicates(
+  rows: SmsPreviewRow[],
+  ledger: Ledger,
+): SmsPreviewRow[] {
+  const seen = new Set(ledger.transactions.map(transactionKey));
+  return rows.map((row) => {
+    if (!row.transaction) return { ...row, duplicate: false };
+    const key = transactionKey(row.transaction);
+    const duplicate = row.repeated || seen.has(key);
+    seen.add(key);
+    return { ...row, duplicate };
   });
 }

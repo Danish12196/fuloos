@@ -5,7 +5,7 @@ import type { ImportTransaction } from "./csv";
 import { CANONICAL, CANONICAL_LABEL } from "./ledger/categoriser";
 import { loadLedgerModel, type ModelState } from "./ledger/loader";
 import { loadMap, saveMap, type CategoryMap } from "./ledger/mapping";
-import { previewSms } from "./ledger/smsImport";
+import { markDuplicates, previewSms } from "./ledger/smsImport";
 import {
   BANK_NAMES,
   smsFromBackupXml,
@@ -83,10 +83,16 @@ export function SmsImport({
       ),
     [messages, account, fallbackDate, bank, ledger, model, map],
   );
-  const rows = preview.map((r) => ({
-    ...r,
-    transaction: r.transaction ? { ...r.transaction, ...edits[r.index] } : null,
-  }));
+  // Duplicates are re-checked on the edited values (a changed date or payee can create or clear one).
+  const rows = markDuplicates(
+    preview.map((r) => ({
+      ...r,
+      transaction: r.transaction
+        ? { ...r.transaction, ...edits[r.index] }
+        : null,
+    })),
+    ledger,
+  );
   const importable = rows.filter((r) => r.transaction);
   const skipped = rows.filter((r) => r.skipped);
   const invalid = rows.filter((r) => r.error);

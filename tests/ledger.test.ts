@@ -17,7 +17,11 @@ import {
   type PlainModel,
 } from "../src/ledger/model.ts";
 import { guessMap } from "../src/ledger/mapping.ts";
-import { previewSms, displayPayee } from "../src/ledger/smsImport.ts";
+import {
+  previewSms,
+  displayPayee,
+  markDuplicates,
+} from "../src/ledger/smsImport.ts";
 import type { Ledger } from "../src/domain.ts";
 
 // All messages below are synthetic, written from the public bank templates. No real SMS is used in tests.
@@ -244,4 +248,56 @@ test("SMS preview builds reviewable transactions", () => {
   assert.equal(salary.transaction?.payee, "Salary / income");
   assert.equal(repeat.duplicate, true);
   assert.equal(displayPayee("AL MAYA SUPERMARKET"), "Al Maya Supermarket");
+});
+
+test("duplicates follow edits and repeated SMS on different days are kept", () => {
+  const ledger: Ledger = {
+    accounts: [
+      {
+        id: "a",
+        name: "Liv",
+        type: "current",
+        opening_balance: 0,
+        opening_date: "2020-01-01",
+        color: "",
+      },
+    ],
+    categories: [],
+    transactions: [
+      {
+        id: "t1",
+        type: "expense",
+        amount: 4500,
+        account_id: "a",
+        to_account_id: null,
+        category_id: null,
+        date: "2025-01-10",
+        payee: "Talabat",
+        notes: "",
+      },
+    ],
+  };
+  const rows = previewSms(
+    [
+      { message: SMS.salary, date: "2025-01-31", sender: "Liv" },
+      { message: SMS.salary, date: "2025-02-28", sender: "Liv" },
+      { message: SMS.liv, date: null, sender: null },
+    ],
+    { account: "a", fallbackDate: "2025-06-01" },
+    ledger,
+    null,
+    {},
+  );
+  assert.equal(rows[0].duplicate, false);
+  assert.equal(rows[1].duplicate, false);
+  assert.equal(rows[2].duplicate, false);
+  const edited = markDuplicates(
+    rows.map((r, i) =>
+      i === 2
+        ? { ...r, transaction: { ...r.transaction!, date: "2025-01-10" } }
+        : r,
+    ),
+    ledger,
+  );
+  assert.equal(edited[2].duplicate, true);
 });
