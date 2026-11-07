@@ -44,6 +44,7 @@ export function TransactionsPanel({
   selected,
   onSelectionChange,
   onImport,
+  onImportSms,
   onEditSelected,
   onEdit,
   onDelete,
@@ -64,6 +65,7 @@ export function TransactionsPanel({
   selected: Set<string>;
   onSelectionChange: (next: Set<string>) => void;
   onImport: () => void;
+  onImportSms: () => void;
   onEditSelected: (items: Transaction[]) => void;
   onEdit: (t: Transaction) => void;
   onDelete: (t: Transaction) => void;
@@ -217,6 +219,13 @@ export function TransactionsPanel({
           onClick={onImport}
         >
           Import CSV
+        </button>
+        <button
+          className="secondary"
+          disabled={busy || loading || !ledger.accounts.length}
+          onClick={onImportSms}
+        >
+          Import SMS
         </button>
         <label className="search">
           <Search size={17} />

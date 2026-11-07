@@ -5,3 +5,8 @@ dist/
 !.env.example
 
 *.tsbuildinfo
+
+# Ledger model files are hosted outside the repo (see README, "SMS import").
+/public/ledger-model*.json
+*.ledger-model.json
+ledger_web_model.json

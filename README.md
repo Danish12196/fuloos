@@ -62,6 +62,28 @@ Open **Recurring** from the workspace navigation to manage regular bills, subscr
 
 Open **Budgets** to set a monthly limit (integer fils, AED) per category. A budget starts in a month and either repeats every month or ends in a chosen month; one category cannot have two budgets covering the same month. The page shows spending against each limit for the selected month (green under 80%, amber from 80%, red when over), categories with spending but no budget, and every past, current and upcoming budget for editing or deletion. **Reports** adds a *Budget vs actual* panel for the chosen range: each month's budget is added up across the range, and only expenses from months a category has a budget count against it. Income and transfers never use up a budget. Deleting a category deletes its budgets. Demo mode includes sample budgets.
 
+## SMS import and category suggestions
+
+Open Transactions → Import SMS. Paste bank SMS alerts (one per paragraph) or upload an SMS Backup & Restore XML file, choose the account, and review before importing. The parser covers the Liv, Mashreq, ADCB, FAB and ADIB templates. OTPs, declined payments, moves inside the same bank and card repayments are skipped. Foreign-currency purchases are converted at the parser's fixed reference rate and the original amount is kept in the notes. Rows already in the ledger, or the same SMS pasted twice, are flagged as possible duplicates.
+
+Expenses get a category suggestion from a confidence cascade ported from the [Ledger project](https://github.com/Danish12196/ledger-uae-banks) (MAAI902): public brand and keyword rules first, then a calibrated TF-IDF + logistic regression model. Below 60% confidence the row is marked "Check category". The model predicts 12 standard groups; the dialog's "Match suggestions to your categories" panel maps each group to one of your own categories (guessed from category names, saved in this browser).
+
+Privacy:
+
+- SMS text is parsed in the browser and never uploaded or stored. Only confirmed transactions are saved.
+- `src/ledger/rules.generated.ts` is produced by `scripts/ledger/import-rules.ts`, which copies only the generic tables (bank templates, public brands, keywords) and drops the Ledger project's merchant overrides because those came from contributors' own SMS.
+- No model file is committed. `scripts/ledger/hash-model.ts` converts the Ledger export into a hashed model: every character and word n-gram is replaced by a 24-bit FNV-1a bucket, so the file holds numbers only, and the converter fails if any vocabulary string survives. The app refuses plain exports and verifies a self-check built from public brand names. Hashing removes readable text but is not anonymisation on its own: someone can still test whether a guessed merchant name hashes to a bucket in the file, so the minimum-contributors rule in the Ledger export still matters.
+
+To enable the model, convert and host it, then set `VITE_LEDGER_MODEL_URL` for the build:
+
+```sh
+node --experimental-strip-types scripts/ledger/hash-model.ts path/to/ledger_web_model.json ledger-model-v1.json 1
+# upload ledger-model-v1.json to the model host (it must allow cross-origin GET), then:
+# VITE_LEDGER_MODEL_URL=https://<host>/ledger-model-v1.json
+```
+
+Without the variable, SMS import works with the rules alone.
+
 ## Checks
 
 ```sh
@@ -77,7 +99,7 @@ FULOOS_TEST_EMAIL=you+fuloos-test@example.com FULOOS_TEST_PASSWORD='long-random-
 
 ## Scope
 
-Android, SMS capture, PDF imports, automated payment execution, push notifications, savings goals and cloud LLM APIs are deferred. The ledger is shared-client-ready; one currency (AED) is maintained to prevent implicit FX conversions.
+Android SMS capture, PDF imports, automated payment execution, push notifications, savings goals and cloud LLM APIs are deferred. The ledger is shared-client-ready; one currency (AED) is maintained to prevent implicit FX conversions.
 
 Design references: [Ivy Wallet](https://github.com/Ivy-Apps/ivy-wallet), [Actual accounts](https://actualbudget.org/docs/accounts/) and [Actual transfers](https://actualbudget.org/docs/transactions/transfers/). This is an original interface and implementation; no reference application's code or artwork is copied.
 

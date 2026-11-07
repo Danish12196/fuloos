@@ -3269,3 +3269,32 @@ button {
     flex: 1 1 auto;
   }
 }
+
+/* SMS import */
+.sms-modal details {
+  margin: 12px 0;
+}
+.sms-modal summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.sms-map {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.sms-modal textarea {
+  width: 100%;
+  font-family: inherit;
+  resize: vertical;
+}
+.sms-modal .csv-table td input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 120px;
+}
+.sms-modal .csv-table td small {
+  display: block;
+  margin-top: 4px;
+}
+.sms-modal tr.sms-review td:last-child {
+  color: var(--warning, #b45309);
+  font-weight: 600;
+}
