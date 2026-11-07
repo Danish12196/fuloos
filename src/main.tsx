@@ -31,6 +31,7 @@ import {
   validateRecurringSchedule,
 } from "./recurring";
 import { ThemeToggle } from "./ThemeToggle";
+import { TransactionsPanel } from "./TransactionTable";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -282,6 +283,17 @@ function App() {
       setModal(null);
     } finally {
       setBusy(false);
+    }
+  }
+  async function categorize(t: Transaction, categoryId: string) {
+    setError("");
+    try {
+      const { id, ...value } = t;
+      const next = { ...value, category_id: categoryId };
+      validateTransaction({ ...next, id }, ledger);
+      await save("transactions", next, id);
+    } catch (e) {
+      setError(errorMessage(e));
     }
   }
   async function saveRecurring(
@@ -663,10 +675,7 @@ function App() {
         setLedger((l) => ({
           ...l,
           transactions: [...l.transactions, savedTx],
-          recurring_occurrences: [
-            ...(l.recurring_occurrences ?? []),
-            savedOcc,
-          ],
+          recurring_occurrences: [...(l.recurring_occurrences ?? []), savedOcc],
         }));
       }
       setConfirmOcc(null);
@@ -1017,23 +1026,6 @@ function App() {
       (s, a) => s + balance(a, ledger.transactions),
       0,
     );
-  const filtered = monthly
-    .filter(
-      (t) =>
-        (!accountFilter ||
-          t.account_id === accountFilter ||
-          t.to_account_id === accountFilter) &&
-        (!kindFilter || t.type === kindFilter) &&
-        [
-          t.payee,
-          t.notes,
-          ledger.categories.find((c) => c.id === t.category_id)?.name ?? "",
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-    )
-    .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   const spending = ledger.categories
     .map((c) => ({
       ...c,
@@ -1097,7 +1089,10 @@ function App() {
                 setSearch("");
                 setAccountFilter("");
                 setKindFilter("");
-                if (name === "Recurring") { setRecurringFilter("all"); setRecurringTab("schedules"); }
+                if (name === "Recurring") {
+                  setRecurringFilter("all");
+                  setRecurringTab("schedules");
+                }
               }}
             >
               <Icon size={19} />
@@ -1696,107 +1691,29 @@ function App() {
             </div>
           )}
           {page === "Transactions" && (
-            <section className="panel">
-              <div className="filters">
-                <button
-                  className="secondary"
-                  disabled={busy || loading || !ledger.accounts.length}
-                  onClick={() => setImportOpen(true)}
-                >
-                  Import CSV
-                </button>
-                <label className="search">
-                  <Search size={17} />
-                  <input
-                    aria-label="Search transactions"
-                    placeholder="Search transactions…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </label>
-                <select
-                  aria-label="Filter account"
-                  value={accountFilter}
-                  onChange={(e) => setAccountFilter(e.target.value)}
-                >
-                  <option value="">All accounts</option>
-                  {ledger.accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="Filter type"
-                  value={kindFilter}
-                  onChange={(e) => setKindFilter(e.target.value)}
-                >
-                  <option value="">All types</option>
-                  <option value="expense">Expenses</option>
-                  <option value="income">Income</option>
-                  <option value="transfer">Transfers</option>
-                </select>
-                <span className="muted small">
-                  {filtered.length} transactions
-                </span>
-              </div>
-              <div className="bulk-toolbar">
-                <label className="selection-label">
-                  <input
-                    type="checkbox"
-                    disabled={busy || loading || !filtered.length}
-                    checked={
-                      filtered.length > 0 &&
-                      filtered.every((t) => selected.has(t.id))
-                    }
-                    onChange={(e) =>
-                      setSelected((old) => {
-                        const next = new Set(old);
-                        for (const t of filtered) {
-                          if (e.target.checked) next.add(t.id);
-                          else next.delete(t.id);
-                        }
-                        return next;
-                      })
-                    }
-                  />
-                  Select all {filtered.length} results
-                </label>
-                <span>
-                  {selected.size} selected ·{" "}
-                  {filtered.filter((t) => selected.has(t.id)).length} in these
-                  results
-                </span>
-                <button
-                  className="secondary"
-                  disabled={busy || loading || !selected.size}
-                  onClick={() =>
-                    setBulkItems(
-                      ledger.transactions.filter((t) => selected.has(t.id)),
-                    )
-                  }
-                >
-                  Edit selected
-                </button>
-                <button
-                  className="text-button"
-                  disabled={busy || !selected.size}
-                  onClick={() => setSelected(new Set())}
-                >
-                  Clear selection
-                </button>
-              </div>
-              <TransactionList
-                selected={selected}
-                onSelect={toggleSelection}
-                items={filtered}
-                ledger={ledger}
-                concealed={concealed}
-                onEdit={(t) => setModal({ kind: "transaction", item: t })}
-                onDelete={(t) => void remove("transactions", t.id)}
-                busy={busy}
-              />
-            </section>
+            <TransactionsPanel
+              ledger={ledger}
+              from={
+                view === "all" ? undefined : start.toISOString().slice(0, 10)
+              }
+              to={view === "all" ? undefined : end.toISOString().slice(0, 10)}
+              hidden={hidden}
+              busy={busy}
+              loading={loading}
+              search={search}
+              onSearch={setSearch}
+              accountFilter={accountFilter}
+              onAccountFilter={setAccountFilter}
+              kindFilter={kindFilter}
+              onKindFilter={setKindFilter}
+              selected={selected}
+              onSelectionChange={setSelected}
+              onImport={() => setImportOpen(true)}
+              onEditSelected={setBulkItems}
+              onEdit={(t) => setModal({ kind: "transaction", item: t })}
+              onDelete={(t) => void remove("transactions", t.id)}
+              onCategorize={(t, categoryId) => void categorize(t, categoryId)}
+            />
           )}
           <footer>
             <Leaf size={14} />
@@ -2439,7 +2356,9 @@ function Editor({
               {(["expense", "income", "transfer"] as const).map((k) => (
                 <button
                   type="button"
-                  disabled={Boolean(linkedSchedule && k !== linkedSchedule.type)}
+                  disabled={Boolean(
+                    linkedSchedule && k !== linkedSchedule.type,
+                  )}
                   className={kind === k ? "selected" : ""}
                   key={k}
                   onClick={() => setKind(k)}
