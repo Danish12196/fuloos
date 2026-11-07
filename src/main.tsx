@@ -3,6 +3,7 @@ import { ColorPicker, EmojiField } from "./Appearance";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, createPresetStore, type Session } from "./client";
+import { DeleteAccountDialog } from "./DeleteAccount";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
 import {
@@ -121,6 +122,7 @@ function App() {
     [page, setPage] = useState("Overview"),
     [modal, setModal] = useState<Modal>(null),
     [importOpen, setImportOpen] = useState(false),
+    [deleteOpen, setDeleteOpen] = useState(false),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false),
@@ -1122,6 +1124,16 @@ function App() {
               {demo ? "Sample data · not saved" : "Personal workspace"}
             </small>
           </div>
+          {!demo && session && (
+            <button
+              className="icon-button"
+              aria-label="Delete my account"
+              title="Delete my account"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 size={18} />
+            </button>
+          )}
           <button
             className="icon-button"
             aria-label="Sign out"
@@ -1138,6 +1150,23 @@ function App() {
           </button>
         </div>
       </aside>
+      {deleteOpen && backend && session && (
+        <DeleteAccountDialog
+          email={session.user.email}
+          onClose={() => setDeleteOpen(false)}
+          onDelete={async (progress) => {
+            try {
+              await backend!.deleteAccount(progress);
+            } catch (e) {
+              // Some records may already be gone; show what is left on the server.
+              void load();
+              throw e;
+            }
+            setDeleteOpen(false);
+            setLedger(emptyLedger);
+          }}
+        />
+      )}
       <main>
         <header className="topbar">
           <span>
@@ -1182,10 +1211,10 @@ function App() {
                     : page === "Budgets"
                       ? "Monthly limits per category, and how your spending measures up."
                       : page === "Accounts"
-                      ? "Every account. One place to see where you stand."
-                      : page === "Categories"
-                        ? "Organize your money in a way that makes sense to you."
-                        : "The small details behind the bigger picture."}
+                        ? "Every account. One place to see where you stand."
+                        : page === "Categories"
+                          ? "Organize your money in a way that makes sense to you."
+                          : "The small details behind the bigger picture."}
               </p>
             </div>
             <button
