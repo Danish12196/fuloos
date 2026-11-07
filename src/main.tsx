@@ -11,6 +11,7 @@ import { applyAccountDeletion, planAccountDeletion } from "./accountDeletion";
 import { DeleteCategoriesDialog } from "./DeleteCategories";
 import {
   applyCategoryDeletion,
+  movedTransactions,
   planCategoryDeletion,
   validateMoveTarget,
 } from "./categoryDeletion";
@@ -1079,6 +1080,7 @@ function App() {
       setLedger((l) => applyAccountDeletion(l, account.id, plan));
     }
     const removed = new Set(plan.transactionIds);
+    for (const id of removed) savedTx.current.delete(id);
     setSelected((old) => new Set([...old].filter((v) => !removed.has(v))));
     if (accountFilter === account.id) setAccountFilter("");
     setAccountToDelete(null);
@@ -1119,15 +1121,20 @@ function App() {
         checkOwner(stillOwner);
         // Plan again when the task starts: earlier queued work may have
         // added transactions to these categories since.
-        const plan = planCategoryDeletion(ledgerRef.current, ids);
+        // Include records an earlier task saved that React hasn't rendered yet.
+        const current = ledgerRef.current;
+        const fresh = new Map(current.transactions.map((t) => [t.id, t]));
+        for (const [id, t] of savedTx.current) fresh.set(id, t);
+        const latest: Ledger = {
+          ...current,
+          transactions: [...fresh.values()],
+        };
+        const plan = planCategoryDeletion(latest, ids);
         if (!plan.categoryIds.length) return;
-        validateMoveTarget(ledgerRef.current, plan, target);
+        validateMoveTarget(latest, plan, target);
         let saved = 0;
         try {
-          const moved = plan.transactionIds
-            .map((id) => latestTransaction(id))
-            .filter((t): t is Transaction => !!t)
-            .map((t) => ({ ...t, category_id: target }));
+          const moved = movedTransactions(latest, plan, target);
           if (moved.length)
             await api.updateTransactions(
               moved,
@@ -1260,6 +1267,7 @@ function App() {
         if (!backend || !session) throw new Error("Please sign in.");
         const current = generation.current;
         await backend.remove(table, id);
+        if (table === "transactions") savedTx.current.delete(id);
         if (current !== generation.current) return;
         setLedger(applyRemoval);
         setSelected((old) => new Set([...old].filter((value) => value !== id)));
