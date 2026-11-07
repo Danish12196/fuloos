@@ -122,3 +122,15 @@ test("bulk edits preserve untouched fields, support clearing and appending notes
   );
 });
 
+test("rebaseEdit keeps earlier queued changes to other fields", async () => {
+  const { rebaseEdit } = await import("../src/bulk.ts");
+  const original = { id: "t1", category_id: "a", notes: "", payee: "Shop" };
+  const afterFirst = { ...original, category_id: "b" };
+  const second = { ...original, notes: "lunch" };
+  assert.deepEqual(rebaseEdit(original, second, afterFirst), {
+    id: "t1",
+    category_id: "b",
+    notes: "lunch",
+    payee: "Shop",
+  });
+});

@@ -7,8 +7,6 @@ import {
   Calendar,
   Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Info,
   Lightbulb,
   Link2,
@@ -30,6 +28,7 @@ import {
   Unlink,
   X,
 } from "lucide-react";
+import { PeriodPicker } from "./PeriodPicker";
 import {
   errorMessage,
   minor,
@@ -1568,25 +1567,12 @@ export function RecurringPage({
           ) : (
             <div className="recurring-calendar-wrap">
               <div className="calendar-toolbar">
-                <div className="month-control">
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label="Previous calendar month"
-                    onClick={() => setCalMonth((m) => shiftMonth(m, -1))}
-                  >
-                    <ChevronLeft size={17} />
-                  </button>
-                  <span>{formatMonthYear(calMonth)}</span>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label="Next calendar month"
-                    onClick={() => setCalMonth((m) => shiftMonth(m, 1))}
-                  >
-                    <ChevronRight size={17} />
-                  </button>
-                </div>
+                <PeriodPicker
+                  label="Calendar month"
+                  month={calMonth}
+                  currentMonth={today().slice(0, 7)}
+                  onChange={(next) => setCalMonth(next.month)}
+                />
                 <span className="muted small">
                   {calendarData.items.length} scheduled in month
                 </span>

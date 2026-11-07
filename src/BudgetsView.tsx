@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { PeriodPicker } from "./PeriodPicker";
 import {
   ArrowRight,
-  ChevronLeft,
-  ChevronRight,
   Pencil,
   PiggyBank,
   Plus,
@@ -21,6 +20,7 @@ import {
   errorMessage,
   minor,
   shiftMonth,
+  today,
   type Budget,
   type Category,
   type Ledger,
@@ -152,29 +152,29 @@ export function BudgetsPage({
           categoryById.get(b.category_id)?.name ?? "",
         ) || b.start_month.localeCompare(a.start_month),
     );
+  const budgetMonths = useMemo(() => {
+    // Dot every month that has at least one budget, so gaps are easy to spot.
+    const set = new Set<string>();
+    for (const b of budgets) {
+      if (!/^\d{4}-\d{2}$/.test(b.start_month)) continue;
+      const last = b.end_month || shiftMonth(month, 60);
+      for (let m = b.start_month; m <= last; m = shiftMonth(m, 1)) set.add(m);
+    }
+    return set;
+  }, [budgets, month]);
   const left = report.totalBudget - report.totalActual;
   const overCount = report.rows.filter((r) => r.status === "over").length;
 
   return (
     <>
       <div className="period-row">
-        <div className="month-control">
-          <button
-            className="icon-button"
-            aria-label="Previous month"
-            onClick={() => onMonthChange(shiftMonth(month, -1))}
-          >
-            <ChevronLeft size={17} />
-          </button>
-          <span>{monthLabel(month)}</span>
-          <button
-            className="icon-button"
-            aria-label="Next month"
-            onClick={() => onMonthChange(shiftMonth(month, 1))}
-          >
-            <ChevronRight size={17} />
-          </button>
-        </div>
+        <PeriodPicker
+          label="Budget month"
+          month={month}
+          currentMonth={today().slice(0, 7)}
+          activeMonths={budgetMonths}
+          onChange={(next) => onMonthChange(next.month)}
+        />
         <span className="muted">Budgets compare against expenses only</span>
       </div>
       <section className="stats">

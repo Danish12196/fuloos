@@ -10,6 +10,9 @@ import { DeleteMoneyAccountDialog } from "./DeleteMoneyAccount";
 import { applyAccountDeletion, planAccountDeletion } from "./accountDeletion";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
+import { QueueDock, useLeaveWarning, useQueue } from "./QueueDock";
+import { TaskQueue } from "./taskQueue";
+import { rebaseEdit } from "./bulk";
 import {
   BudgetEditorModal,
   BudgetReportPanel,
@@ -51,8 +54,6 @@ import {
   LogOut,
   X,
   Search,
-  ChevronLeft,
-  ChevronRight,
   ArrowRight,
   Check,
   Eye,
@@ -69,7 +70,6 @@ import {
   errorMessage,
   minor,
   money,
-  shiftMonth,
   today,
   totals,
   validateTransaction,
@@ -88,6 +88,8 @@ import {
 } from "./domain";
 import { demoLedger } from "./demo";
 import "./style.css";
+import { PeriodPicker } from "./PeriodPicker";
+import { isPeriodSpan, periodDates, periodLabel } from "./period";
 function demoId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -160,6 +162,52 @@ function App() {
     draft?: Partial<BudgetDraft>;
   } | null>(null);
   const generation = useRef(0);
+  // Background saves keep running while the user moves between pages.
+  const queue = useMemo(() => new TaskQueue(), []);
+  const owner = useRef<string | null>(null);
+  owner.current = demo ? null : (session?.user.id ?? null);
+  const { pending: queuePending } = useQueue(queue);
+  const ledgerRef = useRef(ledger);
+  ledgerRef.current = ledger;
+  // Records saved by queued tasks, so a later task builds on them even
+  // before React has re-rendered with the new ledger.
+  const savedTx = useRef(new Map<string, Transaction>());
+  function latestTransaction(id: string) {
+    return (
+      savedTx.current.get(id) ??
+      ledgerRef.current.transactions.find((t) => t.id === id)
+    );
+  }
+  useLeaveWarning(queuePending);
+  /** Queued work only runs for the account that queued it. */
+  function ownerGuard() {
+    const id = owner.current;
+    if (!id) throw new Error("Please sign in.");
+    return () => owner.current === id;
+  }
+  function checkOwner(stillOwner: () => boolean) {
+    if (!stillOwner())
+      throw new Error(
+        "You signed out before this finished. Nothing more was saved.",
+      );
+  }
+  /** Add saved records, skipping any a reload already brought in. */
+  function mergeRecords<K extends "transactions" | "categories">(
+    table: K,
+    records: Ledger[K],
+  ) {
+    if (table === "transactions")
+      for (const r of records as Transaction[]) savedTx.current.set(r.id, r);
+    setLedger((l) => {
+      const byId = new Map(records.map((r) => [r.id, r]));
+      const kept = (l[table] as Ledger[K]).map((r) => {
+        const next = byId.get(r.id);
+        if (next) byId.delete(r.id);
+        return next ?? r;
+      });
+      return { ...l, [table]: [...kept, ...byId.values()] } as Ledger;
+    });
+  }
   const presetStore = useMemo(
     () => createPresetStore(!demo && !!session),
     [demo, session?.user.id],
@@ -172,6 +220,7 @@ function App() {
     setConfirmOcc(null);
     setRecurringTab("schedules");
     setRecurringFilter("all");
+    queue.cancelQueued();
   }, [session?.user.id, demo]);
   function toggleSelection(id: string) {
     setSelected((old) => {
@@ -182,6 +231,7 @@ function App() {
     });
   }
   function updateTransactions(records: Transaction[]) {
+    for (const r of records) savedTx.current.set(r.id, r);
     const byId = new Map(records.map((t) => [t.id, t]));
     setLedger((l) => ({
       ...l,
@@ -193,29 +243,47 @@ function App() {
     rows: Transaction[],
     progress: (records: Transaction[]) => void,
   ) {
-    if (busy) throw new Error("Another operation is running.");
     rows.forEach((t) => validateTransaction(t, ledger));
-    const current = generation.current;
-    setBusy(true);
-    try {
-      if (demo) {
-        updateTransactions(rows);
-        progress(rows);
-      } else {
-        if (!backend || !session) throw new Error("Please sign in.");
-        await backend.updateTransactions(
-          rows,
-          (_n, records) => {
-            if (current !== generation.current) return;
-            updateTransactions(records);
-            progress(records);
-          },
-          () => current === generation.current,
-        );
-      }
-    } finally {
-      setBusy(false);
+    if (demo) {
+      updateTransactions(rows);
+      progress(rows);
+      return;
     }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    const originals = new Map(
+      ledger.transactions.map((t) => [t.id, t] as const),
+    );
+    queue.enqueue({
+      label: `Update ${rows.length} ${rows.length === 1 ? "transaction" : "transactions"}`,
+      total: rows.length,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        try {
+          // Re-apply only the changed fields to the newest copy, so an
+          // earlier queued edit to the same rows is not undone.
+          const fresh = rows.map((row) => {
+            const original = originals.get(row.id);
+            const latest = latestTransaction(row.id);
+            return original && latest ? rebaseEdit(original, row, latest) : row;
+          });
+          fresh.forEach((t) => validateTransaction(t, ledgerRef.current));
+          await api.updateTransactions(
+            fresh,
+            (saved, records) => {
+              if (!stillOwner()) return;
+              updateTransactions(records);
+              ctx.progress(saved);
+            },
+            stillOwner,
+          );
+        } catch (e) {
+          if (stillOwner()) await load();
+          throw e;
+        }
+      },
+    });
   }
   useEffect(() => {
     if (!backend) return;
@@ -239,7 +307,10 @@ function App() {
     setError("");
     try {
       const data = await backend.load();
-      if (current === generation.current) setLedger(data);
+      if (current === generation.current) {
+        savedTx.current.clear();
+        setLedger(data);
+      }
     } catch (e) {
       if (current === generation.current) setError(errorMessage(e));
     } finally {
@@ -275,6 +346,32 @@ function App() {
                 : [...l[table], next],
             }) as Ledger,
         );
+      } else if (table === "transactions") {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const api = backend;
+        const stillOwner = ownerGuard();
+        const payee = String(value.payee ?? "").trim();
+        const original = id
+          ? ledger.transactions.find((t) => t.id === id)
+          : undefined;
+        queue.enqueue({
+          label: `${id ? "Update" : "Add"} transaction${payee ? ` · ${payee.slice(0, 40)}` : ""}`,
+          run: async () => {
+            checkOwner(stillOwner);
+            const latest = id ? latestTransaction(id) : undefined;
+            const body =
+              original && latest
+                ? rebaseEdit<Record<string, unknown>>(
+                    { ...original },
+                    { ...original, ...value },
+                    { ...latest },
+                  )
+                : value;
+            delete body.id;
+            const record = await api.save("transactions", body, id);
+            if (stillOwner()) mergeRecords("transactions", [record]);
+          },
+        });
       } else {
         if (!backend || !session) throw new Error("Please sign in.");
         const record = await backend.save(table, value, id);
@@ -830,34 +927,45 @@ function App() {
   async function importTransactions(
     rows: ImportTransaction[],
     progress: (n: number) => void,
+    source = "Import",
   ) {
-    if (busy) throw new Error("Another operation is running.");
-    setBusy(true);
-    const current = generation.current;
-    try {
-      rows.forEach((row) => validateTransaction(row, ledger));
-      if (demo) {
-        setLedger((l) => ({
-          ...l,
-          transactions: [
-            ...l.transactions,
-            ...rows.map((row) => ({ ...row, id: demoId() })),
-          ],
-        }));
-        progress(rows.length);
-      } else {
-        if (!backend || !session) throw new Error("Please sign in.");
-        await backend.createMany(
-          "transactions",
-          rows,
-          (saved) => progress(saved),
-          () => generation.current === current,
-        );
-      }
-    } finally {
-      if (!demo && generation.current === current) await load();
-      setBusy(false);
+    rows.forEach((row) => validateTransaction(row, ledger));
+    if (demo) {
+      setLedger((l) => ({
+        ...l,
+        transactions: [
+          ...l.transactions,
+          ...rows.map((row) => ({ ...row, id: demoId() })),
+        ],
+      }));
+      progress(rows.length);
+      return;
     }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    queue.enqueue({
+      label: `${source} ${rows.length} ${rows.length === 1 ? "transaction" : "transactions"}`,
+      total: rows.length,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        try {
+          await api.createMany(
+            "transactions",
+            rows,
+            (saved, records) => {
+              if (!stillOwner()) return;
+              mergeRecords("transactions", records);
+              ctx.progress(saved);
+            },
+            stillOwner,
+          );
+        } catch (e) {
+          if (stillOwner()) await load();
+          throw e;
+        }
+      },
+    });
   }
   async function createCategories(
     rows: Omit<Category, "id">[],
@@ -1058,10 +1166,10 @@ function App() {
   if (view === "3" || view === "6" || view === "12")
     start.setUTCMonth(start.getUTCMonth() - Number(view) + 1);
   if (view === "ytd") start.setUTCMonth(0);
-  const rangeLabel =
-    view === "all"
-      ? "All time"
-      : `${start.toISOString().slice(0, 10)} – ${new Date(end.getTime() - 86400000).toISOString().slice(0, 10)}`;
+  const rangeLabel = periodLabel(isPeriodSpan(view) ? view : "month", month);
+  const activeMonths = new Set(
+    ledger.transactions.map((t) => t.date.slice(0, 7)),
+  );
   const monthly = ledger.transactions.filter(
       (t) =>
         view === "all" ||
@@ -1314,44 +1422,21 @@ function App() {
             page === "Transactions" ||
             page === "Reports") && (
             <div className="period-row">
-              <select
-                aria-label="Date range"
-                value={view}
-                onChange={(e) => {
-                  setView(e.target.value);
-                  setMonth(today().slice(0, 7));
+              <PeriodPicker
+                label="Date range"
+                month={month}
+                span={isPeriodSpan(view) ? view : "month"}
+                spans={["month", "3", "6", "ytd", "12", "all"]}
+                currentMonth={today().slice(0, 7)}
+                activeMonths={activeMonths}
+                onChange={(next) => {
+                  setView(next.span);
+                  setMonth(next.month);
                 }}
-              >
-                <option value="month">Month</option>
-                <option value="3">3 months</option>
-                <option value="6">6 months</option>
-                <option value="ytd">Year to date</option>
-                <option value="12">1 year</option>
-                <option value="all">All time</option>
-              </select>
-              <div className="month-control">
-                <button
-                  className="icon-button"
-                  aria-label="Previous month"
-                  onClick={() => setMonth((m) => shiftMonth(m, -1))}
-                >
-                  <ChevronLeft size={17} />
-                </button>
-                <span>
-                  {new Date(`${month}-15T12:00:00Z`).toLocaleDateString(
-                    "en-GB",
-                    { month: "long", year: "numeric", timeZone: "Asia/Dubai" },
-                  )}
-                </span>
-                <button
-                  className="icon-button"
-                  aria-label="Next month"
-                  onClick={() => setMonth((m) => shiftMonth(m, 1))}
-                >
-                  <ChevronRight size={17} />
-                </button>
-              </div>
-              <span className="muted">{rangeLabel}</span>
+              />
+              <span className="muted">
+                {periodDates(isPeriodSpan(view) ? view : "month", month)}
+              </span>
             </div>
           )}
           {page === "Overview" && (
@@ -1805,6 +1890,7 @@ function App() {
           </footer>
         </div>
       </main>
+      <QueueDock queue={queue} />
       {bulkItems && (
         <BulkEdit
           items={bulkItems}
@@ -1819,7 +1905,9 @@ function App() {
         <CsvImport
           ledger={ledger}
           onClose={() => setImportOpen(false)}
-          onImport={importTransactions}
+          onImport={(rows, progress) =>
+            importTransactions(rows, progress, "CSV import:")
+          }
           onCreateCategories={createCategories}
           presetStore={presetStore}
           onCreateCategory={async (value) => {
@@ -1832,7 +1920,9 @@ function App() {
           ledger={ledger}
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
           onClose={() => setSmsOpen(false)}
-          onImport={importTransactions}
+          onImport={(rows, progress) =>
+            importTransactions(rows, progress, "SMS import:")
+          }
         />
       )}
       {recurringModal && (

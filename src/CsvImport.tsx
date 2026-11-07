@@ -505,7 +505,8 @@ export function CsvImport({
           );
         },
       );
-      setDone(true);
+      // Saving continues in the background queue.
+      onClose();
     } catch (e) {
       setError(
         `${(e as Error).message} Import stopped. Successfully saved rows are excluded; review before retrying.`,
