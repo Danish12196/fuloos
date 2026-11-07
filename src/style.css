@@ -3168,3 +3168,104 @@ button {
   background: #193826;
   color: #8edaa8;
 }
+
+/* Budgets */
+.budget-grid {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  align-items: start;
+}
+.budget-side {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.budget-report {
+  margin-bottom: 22px;
+}
+.budget-report .filters {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.budget-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.budget-status {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--link);
+}
+.budget-status.near {
+  color: #a57434;
+}
+.budget-status.over,
+.budget-over-text {
+  color: #b5524a !important;
+}
+.budget-bar {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--soft-surface);
+  margin-top: 9px;
+  overflow: hidden;
+}
+.budget-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #5d8d65;
+  transition: width 0.3s;
+}
+.budget-bar > span.near {
+  background: #c9944f;
+}
+.budget-bar > span.over {
+  background: #c0625a;
+}
+.modal label.budget-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+}
+.budget-check input[type="checkbox"] {
+  width: auto;
+}
+[data-theme="dark"] .budget-status.near {
+  color: #e0b373;
+}
+[data-theme="dark"] .budget-status.over,
+[data-theme="dark"] .budget-over-text {
+  color: #ec958c !important;
+}
+[data-theme="dark"] .budget-bar > span {
+  background: #8fbf95;
+}
+[data-theme="dark"] .budget-bar > span.near {
+  background: #d9a865;
+}
+[data-theme="dark"] .budget-bar > span.over {
+  background: #dc7d73;
+}
+@media (max-width: 1100px) {
+  .budget-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .budget-bar > span {
+    transition: none;
+  }
+}
+/* Seven bottom-nav destinations on narrow phones (Budgets added). */
+@media (max-width: 430px) {
+  .nav-item {
+    font-size: 9px;
+    padding: 7px 1px;
+    letter-spacing: -0.1px;
+    flex: 1 1 auto;
+  }
+}

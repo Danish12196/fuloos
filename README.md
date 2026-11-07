@@ -1,6 +1,6 @@
 # Fuloos
 
-A UAE-focused personal finance tracker. Phase 1 & 2 deliver a responsive React + TypeScript web app with PocketBase authentication, user-owned accounts and neutral categories, manual transactions, CSV statement imports, recurring schedules & subscriptions, intelligent pattern detection, automatic payment matching, and financial forecasting.
+A UAE-focused personal finance tracker. Phase 1 & 2 deliver a responsive React + TypeScript web app with PocketBase authentication, user-owned accounts and neutral categories, manual transactions, CSV statement imports, recurring schedules & subscriptions, intelligent pattern detection, automatic payment matching, financial forecasting, and monthly category budgets.
 
 ## Local development
 
@@ -22,6 +22,7 @@ The web app builds to `dist/` for Vercel. Your persistent PocketBase instance at
 - `pocketbase/pb_migrations/1793795400_import_appearance.js` — zero-amount support and emoji persistence.
 - `pocketbase/pb_migrations/1793881800_recurring.js` — recurring schedules (`fuloos_recurring`) and confirmed occurrence links (`fuloos_recurring_occurrences`).
 - `pocketbase/pb_migrations/1793968200_recurring_automation.js` — quarterly frequency, match provenance on occurrences, and automation preferences (`fuloos_recurring_prefs`).
+- `pocketbase/pb_migrations/1794141000_budgets.js` — monthly per-category budgets (`fuloos_budgets`).
 
 Set `VITE_POCKETBASE_URL` as a build environment variable after backend setup. No superuser key or service credential belongs in browser code. User sessions are stored in localStorage, refreshed on app startup and removed on signout; restrict frontend script sources and avoid untrusted scripts. Signing out clears the current browser session; PocketBase tokens remain valid until expiry or server-side invalidation.
 
@@ -57,6 +58,10 @@ Open **Recurring** from the workspace navigation to manage regular bills, subscr
 - **Insights**: Multi-horizon cash flow projections (30, 60, 90 days), projected account balances, and monthly fixed vs variable commitments.
 - **Balances stay separate until paid**: Upcoming, overdue and paused schedules are forecasts only and never alter account balances or recorded ledger totals. Marking an occurrence paid either creates a real ledger transaction or links an existing unlinked transaction of matching type, and prevents duplicate confirmation of the same occurrence or linking one transaction twice.
 
+## Budgets
+
+Open **Budgets** to set a monthly limit (integer fils, AED) per category. A budget starts in a month and either repeats every month or ends in a chosen month; one category cannot have two budgets covering the same month. The page shows spending against each limit for the selected month (green under 80%, amber from 80%, red when over), categories with spending but no budget, and every past, current and upcoming budget for editing or deletion. **Reports** adds a *Budget vs actual* panel for the chosen range: each month's budget is added up across the range, and only expenses from months a category has a budget count against it. Income and transfers never use up a budget. Deleting a category deletes its budgets. Demo mode includes sample budgets.
+
 ## Checks
 
 ```sh
@@ -68,7 +73,7 @@ Tests cover exact money calculations, transfers, neutral-category usage, recurri
 
 ## Scope
 
-Android, SMS capture, PDF imports, automated payment execution, push notifications, budgets and cloud LLM APIs are deferred. The ledger is shared-client-ready; one currency (AED) is maintained to prevent implicit FX conversions.
+Android, SMS capture, PDF imports, automated payment execution, push notifications, savings goals and cloud LLM APIs are deferred. The ledger is shared-client-ready; one currency (AED) is maintained to prevent implicit FX conversions.
 
 Design references: [Ivy Wallet](https://github.com/Ivy-Apps/ivy-wallet), [Actual accounts](https://actualbudget.org/docs/accounts/) and [Actual transfers](https://actualbudget.org/docs/transactions/transfers/). This is an original interface and implementation; no reference application's code or artwork is copied.
 

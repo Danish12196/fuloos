@@ -369,7 +369,7 @@ test("batch imports stop when the session changes and warn on uncertain network 
   );
 });
 
-test("PocketBase load fetches all 6 collections, normalizes relations, recurring prefs and empty strings to null", async () => {
+test("PocketBase load fetches all 7 collections, normalizes relations, recurring prefs, budgets and empty strings to null", async () => {
   const f = fixture();
   f.queue.push(
     json(auth),
@@ -456,6 +456,20 @@ test("PocketBase load fetches all 6 collections, normalizes relations, recurring
       ],
       totalPages: 1,
     }),
+    json({
+      items: [
+        {
+          id: "bud1",
+          category_id: "cat1",
+          amount: 90000,
+          start_month: "2026-01",
+          end_month: "",
+          user_id: "user-a",
+          collectionName: "fuloos_budgets",
+        },
+      ],
+      totalPages: 1,
+    }),
   );
 
   await f.backend.signIn("test@example.test", "test-only-password");
@@ -488,7 +502,18 @@ test("PocketBase load fetches all 6 collections, normalizes relations, recurring
   assert.equal(ledger.recurring_occurrences![0].match_source, "manual");
   assert.equal(ledger.recurring_occurrences![0].match_reason, "Manual link");
 
-  // Verify that all 6 collections were requested
+  // Budgets normalization: "" end_month -> null, PocketBase metadata dropped
+  assert.deepEqual(ledger.budgets, [
+    {
+      id: "bud1",
+      category_id: "cat1",
+      amount: 90000,
+      start_month: "2026-01",
+      end_month: null,
+    },
+  ]);
+
+  // Verify that all 7 collections were requested
   const paths = f.calls.slice(1).map((c) => c.url);
   assert.ok(paths.some((p) => p.includes("/fuloos_accounts/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_categories/records")));
@@ -496,6 +521,7 @@ test("PocketBase load fetches all 6 collections, normalizes relations, recurring
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring_occurrences/records")));
   assert.ok(paths.some((p) => p.includes("/fuloos_recurring_prefs/records")));
+  assert.ok(paths.some((p) => p.includes("/fuloos_budgets/records")));
 });
 
 test("PocketBase recurring saves normalize null category_id and end_date on write and restore nulls on read", async () => {
@@ -721,6 +747,7 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring not migrated yet
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_occurrences not migrated yet
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_prefs not migrated yet
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_budgets not migrated yet
   );
 
   await f.backend.signIn("test@example.test", "test-only-password");
@@ -730,6 +757,7 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
   assert.deepEqual(ledger.transactions, []);
   assert.deepEqual(ledger.recurring, []);
   assert.deepEqual(ledger.recurring_occurrences, []);
+  assert.deepEqual(ledger.budgets, []);
   assert.deepEqual(ledger.recurring_prefs, {
     auto_detect: 'on',
     auto_match: "auto",
@@ -744,9 +772,51 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
+    json({ items: [], totalPages: 1 }),
   );
   await assert.rejects(() => f.backend.load(), /Install the PocketBase migration/);
 });
+
+test("PocketBase budget saves send empty end_month and return normalized budgets", async () => {
+  const f = fixture();
+  f.queue.push(
+    json(auth),
+    json({
+      id: "bud1",
+      category_id: "cat1",
+      amount: 50000,
+      start_month: "2026-02",
+      end_month: "",
+      user_id: "user-a",
+    }),
+  );
+  await f.backend.signIn("test@example.test", "test-only-password");
+  const saved = await f.backend.save("budgets", {
+    category_id: "cat1",
+    amount: 50000,
+    start_month: "2026-02",
+    end_month: null,
+  });
+  assert.equal(
+    f.calls[1].url,
+    "https://pb.example.test/api/collections/fuloos_budgets/records",
+  );
+  assert.deepEqual(JSON.parse(String(f.calls[1].init.body)), {
+    category_id: "cat1",
+    amount: 50000,
+    start_month: "2026-02",
+    end_month: "",
+    user_id: "user-a",
+  });
+  assert.deepEqual(saved, {
+    id: "bud1",
+    category_id: "cat1",
+    amount: 50000,
+    start_month: "2026-02",
+    end_month: null,
+  });
+});
+
 test("CSV presets are listed and saved in the per-user presets collection", async () => {
   const f = fixture();
   await assert.rejects(f.backend.listCsvPresets(), /sign in/);

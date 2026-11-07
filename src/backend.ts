@@ -2,6 +2,7 @@ import PocketBase, { BaseAuthStore } from "pocketbase";
 import {
   defaultRecurringPreferences,
   type Account,
+  type Budget,
   type Category,
   type Ledger,
   type RecurringOccurrenceRecord,
@@ -20,7 +21,8 @@ export type Table =
   | "recurring"
   | "recurring_occurrences"
   | "recurring_prefs"
-  | "csv_presets";
+  | "csv_presets"
+  | "budgets";
 export interface CsvPresetRecord {
   id: string;
   name: string;
@@ -36,6 +38,7 @@ type RecordTypes = {
   recurring_occurrences: RecurringOccurrenceRecord;
   recurring_prefs: SavedRecurringPreferences;
   csv_presets: CsvPresetRecord;
+  budgets: Budget;
 };
 export const IMPORT_BATCH_SIZE = 100;
 type AuthResponse = { token: string; record: { id: string; email: string } };
@@ -329,6 +332,7 @@ export class PocketBaseBackend {
       recurring,
       recurringOccurrences,
       recurringPrefs,
+      budgets,
     ] = await Promise.all([
       this.rows<Account>("accounts"),
       this.rows<Category>("categories"),
@@ -336,6 +340,7 @@ export class PocketBaseBackend {
       this.optionalRows<RecurringSchedule>("recurring"),
       this.optionalRows<RecurringOccurrenceRecord>("recurring_occurrences"),
       this.optionalRows<SavedRecurringPreferences>("recurring_prefs"),
+      this.optionalRows<Budget>("budgets"),
     ]);
     return {
       accounts,
@@ -348,6 +353,7 @@ export class PocketBaseBackend {
       recurring_prefs: recurringPrefs[0]
         ? this.normalize("recurring_prefs", recurringPrefs[0])
         : { ...defaultRecurringPreferences },
+      budgets: budgets.map((b) => this.normalize("budgets", b)),
     };
   }
   private prepareBody<K extends Table>(
@@ -365,6 +371,7 @@ export class PocketBaseBackend {
       "end_date",
       "match_source",
       "match_reason",
+      "end_month",
     ]) {
       if (body[key] === null) body[key] = "";
     }
@@ -426,6 +433,16 @@ export class PocketBaseBackend {
         delete normalized.match_reason;
       }
       return normalized as RecordTypes[K];
+    }
+    if (table === "budgets") {
+      const b = record as Budget;
+      return {
+        id: b.id,
+        category_id: b.category_id,
+        amount: b.amount,
+        start_month: b.start_month,
+        end_month: b.end_month || null,
+      } as RecordTypes[K];
     }
     if (table === "recurring_prefs") {
       const pref = record as {

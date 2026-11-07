@@ -11,10 +11,11 @@ The frontend runs on Vercel. PocketBase runs on your existing persistent server 
    - `1793881800_recurring.js` — creates `fuloos_recurring` and `fuloos_recurring_occurrences` with per-user ownership rules, unique indexes, and relational integrity triggers.
    - `1793968200_recurring_automation.js` — adds `quarterly` frequency, `match_source` and `match_reason` on occurrences, and creates `fuloos_recurring_prefs` collection with per-user ownership rules and triggers.
    - `1794054600_csv_presets.js` — creates `fuloos_csv_presets` so CSV column-mapping presets are stored per user and follow them across devices.
+   - `1794141000_budgets.js` — creates `fuloos_budgets` (monthly per-category limits) with per-user ownership rules and integrity triggers.
 3. Run `./pocketbase migrate up` using the instance's existing data and migrations paths, then restart PocketBase. Alternatively, the standard server applies pending migrations on startup. Use the existing container/service's normal deployment process, rather than starting a second instance over the same database.
 4. Keep HTTPS enabled. If the server restricts allowed origins, allow the exact Vercel production origin and localhost development origin. Do not put administrator tokens into Vercel frontend variables.
 5. Set `VITE_POCKETBASE_URL=https://pb.danishali.dev` as a **build** environment variable, then rebuild/redeploy the frontend. Without it, Fuloos remains an explicitly labeled in-memory demo.
-6. Verify signup/signin, then create two test users and confirm that neither user can read or reference the other's accounts, categories, transactions, recurring schedules, occurrence confirmations, or automation preferences. Test opening-date changes, category/account deletion restrictions, recurring schedule confirmation/linking, and credit-card repayments before real financial data.
+6. Verify signup/signin, then create two test users and confirm that neither user can read or reference the other's accounts, categories, transactions, recurring schedules, occurrence confirmations, automation preferences, or budgets. Test opening-date changes, category/account deletion restrictions, recurring schedule confirmation/linking, and credit-card repayments before real financial data.
 
 The migration allows ordinary email/password signup and immediate signin. Email verification is not required initially; if you later require verification, configure SMTP and update the auth UI/collection auth rule together. Password reset and verification-email UI are future additions.
 
@@ -43,6 +44,12 @@ API rules scope every ledger and recurring record to its owner and prevent reass
 - **Upgrade from browser-only presets**: the first time a signed-in user opens the CSV import dialog, presets saved in that browser by older versions are uploaded to their account (a preset whose name already exists in the account is kept as the account version) and then removed from the browser, so a different account signing in later on the same browser does not receive them. Presets that fail to upload stay in the browser and are retried next time.
 - **Before the migration is installed** the app keeps presets in the browser, as before, and says so in the dialog. Demo mode always uses browser storage.
 - The down migration deletes `fuloos_csv_presets` and its saved presets; it does not touch ledger data.
+
+### Budgets collection (`1794141000_budgets.js`)
+
+- **`fuloos_budgets`**: `user_id`, `category_id` (same user's category), `amount` (integer fils `0..100,000,000,000`, zero allowed), `start_month` (`YYYY-MM`) and optional `end_month` (`YYYY-MM`, on or after `start_month`; empty means it repeats indefinitely).
+- **Triggers**: validate same-user category ownership, integer fils, real calendar months between 1970-01 and 2100-12, and reject overlapping month ranges for the same user and category. Ownership cannot be changed. Deleting a category deletes its budgets. Budgets never change account balances.
+- The frontend treats a missing `fuloos_budgets` collection (404 before the migration is applied) as having no budgets.
 
 Each migration includes a down migration that **deletes its Fuloos collections and their records**. Do not run `migrate down` on real data as a routine fix. Restore a verified backup for a production rollback.
 

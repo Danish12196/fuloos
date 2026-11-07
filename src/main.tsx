@@ -4,6 +4,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { backend, createPresetStore, type Session } from "./client";
 import { CsvImport } from "./CsvImport";
+import {
+  BudgetEditorModal,
+  BudgetReportPanel,
+  BudgetsPage,
+  monthLabel,
+  type BudgetDraft,
+} from "./BudgetsView";
+import { validateBudget } from "./budgets";
 import type { ImportTransaction } from "./csv";
 import {
   ConfirmOccurrenceModal,
@@ -46,6 +54,7 @@ import {
   Trash2,
   Pencil,
   Unlink,
+  PiggyBank,
 } from "lucide-react";
 import {
   balance,
@@ -59,6 +68,7 @@ import {
   validateTransaction,
   type Account,
   type AccountType,
+  type Budget,
   type Category,
   type Kind,
   type Ledger,
@@ -135,6 +145,10 @@ function App() {
   const [recurringFilter, setRecurringFilter] = useState<
     "all" | "active" | "overdue" | "paused"
   >("all");
+  const [budgetModal, setBudgetModal] = useState<{
+    item?: Budget;
+    draft?: Partial<BudgetDraft>;
+  } | null>(null);
   const generation = useRef(0);
   const presetStore = useMemo(
     () => createPresetStore(!demo && !!session),
@@ -142,6 +156,7 @@ function App() {
   );
   useEffect(() => {
     setSelected(new Set());
+    setBudgetModal(null);
     setBulkItems(null);
     setRecurringModal(null);
     setConfirmOcc(null);
@@ -865,14 +880,43 @@ function App() {
       setBusy(false);
     }
   }
+  async function saveBudget(value: BudgetDraft, id?: string) {
+    if (busy) return;
+    validateBudget({ ...value, id }, ledger);
+    setBusy(true);
+    const current = generation.current;
+    try {
+      let record: Budget;
+      if (demo) record = { ...value, id: id ?? demoId() };
+      else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        record = await backend.save("budgets", { ...value }, id);
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        budgets: id
+          ? (l.budgets ?? []).map((b) => (b.id === id ? record : b))
+          : [...(l.budgets ?? []), record],
+      }));
+      setBudgetModal(null);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function remove(
-    table: "accounts" | "categories" | "transactions" | "recurring",
+    table: "accounts" | "categories" | "transactions" | "recurring" | "budgets",
     id: string,
   ) {
     const promptText =
       table === "recurring"
         ? "Delete this recurring schedule? Past recorded transactions will stay in your ledger."
-        : "Delete this item? This cannot be undone.";
+        : table === "budgets"
+          ? "Delete this budget? Your transactions are not affected."
+          : table === "categories" &&
+              (ledger.budgets ?? []).some((b) => b.category_id === id)
+            ? "Delete this category? Its budgets will be removed too. This cannot be undone."
+            : "Delete this item? This cannot be undone.";
     if (!window.confirm(promptText)) return;
     setBusy(true);
     setError("");
@@ -905,6 +949,19 @@ function App() {
             recurring_occurrences: (l.recurring_occurrences ?? []).filter(
               (o) => o.recurring_id !== id,
             ),
+          };
+        }
+        if (table === "budgets") {
+          return {
+            ...l,
+            budgets: (l.budgets ?? []).filter((b) => b.id !== id),
+          };
+        }
+        if (table === "categories") {
+          return {
+            ...l,
+            categories: l.categories.filter((c) => c.id !== id),
+            budgets: (l.budgets ?? []).filter((b) => b.category_id !== id),
           };
         }
         if (table === "transactions") {
@@ -998,6 +1055,13 @@ function App() {
       total: uncategorized,
     });
   const concealed = (v: number) => (hidden ? "••••••" : money(v));
+  const budgetRangeStart =
+    view === "all"
+      ? (ledger.budgets ?? []).reduce(
+          (first, b) => (b.start_month < first ? b.start_month : first),
+          month,
+        )
+      : start.toISOString().slice(0, 7);
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -1020,6 +1084,7 @@ function App() {
             { name: "Overview", icon: LayoutDashboard },
             { name: "Transactions", icon: ReceiptText },
             { name: "Recurring", icon: Repeat },
+            { name: "Budgets", icon: PiggyBank },
             { name: "Reports", icon: LayoutDashboard },
             { name: "Accounts", icon: Wallet },
             { name: "Categories", icon: Tags },
@@ -1117,7 +1182,9 @@ function App() {
                   ? "Your everyday finances, all in one calm place."
                   : page === "Recurring"
                     ? "Subscriptions, bills and regular income — balances stay untouched until paid."
-                    : page === "Accounts"
+                    : page === "Budgets"
+                      ? "Monthly limits per category, and how your spending measures up."
+                      : page === "Accounts"
                       ? "Every account. One place to see where you stand."
                       : page === "Categories"
                         ? "Organize your money in a way that makes sense to you."
@@ -1130,6 +1197,8 @@ function App() {
               onClick={() => {
                 if (page === "Recurring") {
                   setRecurringModal({ open: true });
+                } else if (page === "Budgets") {
+                  setBudgetModal({ draft: { start_month: month } });
                 } else {
                   setModal({
                     kind:
@@ -1149,7 +1218,9 @@ function App() {
                   ? "Add category"
                   : page === "Recurring"
                     ? "Add recurring"
-                    : "Add transaction"}
+                    : page === "Budgets"
+                      ? "Add budget"
+                      : "Add transaction"}
             </button>
           </div>
           {error && (
@@ -1440,6 +1511,32 @@ function App() {
               onUpdatePreferences={(prefs) => void savePreferences(prefs)}
               onRestoreDismissed={() => void restoreDismissed()}
               onRunReconciliation={() => void runAutoReconciliation()}
+            />
+          )}
+          {page === "Budgets" && (
+            <BudgetsPage
+              ledger={ledger}
+              month={month}
+              onMonthChange={setMonth}
+              concealed={concealed}
+              busy={busy}
+              onAdd={(draft) => setBudgetModal({ draft })}
+              onEdit={(item) => setBudgetModal({ item })}
+              onDelete={(item) => void remove("budgets", item.id)}
+            />
+          )}
+          {page === "Reports" && (
+            <BudgetReportPanel
+              ledger={ledger}
+              startMonth={budgetRangeStart}
+              endMonth={month}
+              rangeLabel={
+                view === "all"
+                  ? `Every budgeted month through ${monthLabel(month)}`
+                  : rangeLabel
+              }
+              concealed={concealed}
+              onManage={() => setPage("Budgets")}
             />
           )}
           {page === "Reports" && (
@@ -1744,6 +1841,18 @@ function App() {
           onUnlinkOccurrence={(occurrenceId) =>
             void unlinkOccurrence(occurrenceId)
           }
+        />
+      )}
+      {budgetModal && (
+        <BudgetEditorModal
+          ledger={ledger}
+          item={budgetModal.item}
+          draft={budgetModal.draft}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setBudgetModal(null);
+          }}
+          onSave={saveBudget}
         />
       )}
       {confirmOcc && (

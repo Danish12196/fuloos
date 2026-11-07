@@ -1,4 +1,4 @@
-import { today, type Ledger } from "./domain.ts";
+import { shiftMonth, today, type Ledger } from "./domain.ts";
 import { addDays } from "./recurring.ts";
 
 export function demoLedger(): Ledger {
@@ -7,6 +7,7 @@ export function demoLedger(): Ledger {
   const d = (day: number) =>
     `${month}-${String(Math.min(day, Number(date.slice(-2)))).padStart(2, "0")}`;
   const accountOpeningDate = addDays(date, -120);
+  const budgetStart = shiftMonth(month, -2);
 
   return {
     accounts: [
@@ -276,6 +277,43 @@ export function demoLedger(): Ledger {
         transaction_id: "t6",
         match_source: "auto",
         match_reason: "Exact amount and merchant match",
+      },
+    ],
+    budgets: [
+      {
+        id: "b-groceries",
+        category_id: "groceries",
+        amount: 150000,
+        start_month: budgetStart,
+        end_month: null,
+      },
+      {
+        id: "b-food",
+        category_id: "food",
+        amount: 55000,
+        start_month: budgetStart,
+        end_month: null,
+      },
+      {
+        id: "b-transport",
+        category_id: "transport",
+        amount: 60000,
+        start_month: budgetStart,
+        end_month: null,
+      },
+      {
+        id: "b-shopping",
+        category_id: "shopping",
+        amount: 20000,
+        start_month: budgetStart,
+        end_month: null,
+      },
+      {
+        id: "b-bills",
+        category_id: "bills",
+        amount: 90000,
+        start_month: budgetStart,
+        end_month: null,
       },
     ],
     recurring_prefs: {
