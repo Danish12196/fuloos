@@ -2,7 +2,7 @@ import { BulkEdit } from "./BulkEdit";
 import { ColorPicker, EmojiField } from "./Appearance";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { backend, type Session } from "./client";
+import { backend, createPresetStore, type Session } from "./client";
 import { CsvImport } from "./CsvImport";
 import type { ImportTransaction } from "./csv";
 import {
@@ -136,6 +136,10 @@ function App() {
     "all" | "active" | "overdue" | "paused"
   >("all");
   const generation = useRef(0);
+  const presetStore = useMemo(
+    () => createPresetStore(!demo && !!session),
+    [demo, session?.user.id],
+  );
   useEffect(() => {
     setSelected(new Set());
     setBulkItems(null);
@@ -1720,6 +1724,7 @@ function App() {
           onClose={() => setImportOpen(false)}
           onImport={importTransactions}
           onCreateCategories={createCategories}
+          presetStore={presetStore}
           onCreateCategory={async (value) => {
             await save("categories", value);
           }}

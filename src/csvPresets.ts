@@ -1,4 +1,7 @@
-// shortcut: presets are stored per browser in localStorage, not per user, and do not sync.
+// Presets are stored per account in PocketBase (fuloos_csv_presets) when signed in.
+// localStorage is used in demo mode, when no backend is configured, and as a
+// fallback until the server migration is installed. Presets left in
+// localStorage by older versions are uploaded to the account on first load.
 import { parseCsv, type CsvOptions } from "./csv.ts";
 
 export const PRESET_STORAGE_KEY = "fuloos-csv-presets";
@@ -72,7 +75,11 @@ interface ResolvedPreset {
 export interface PresetStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
 }
+
+export const STORAGE_WRITE_ERROR =
+  "The preset change could not be saved because browser storage is full or unavailable.";
 
 interface PresetWriteResult {
   presets: CsvPreset[];
@@ -464,4 +471,250 @@ export function suggestPreset(
   }
 
   return multisetMatch;
+}
+
+// ---------------------------------------------------------------------------
+// Account-synced presets
+// ---------------------------------------------------------------------------
+
+export interface PresetRecord {
+  id: string;
+  name: string;
+  config: unknown;
+}
+
+export interface PresetRecordBody {
+  name: string;
+  name_key: string;
+  config: Omit<CsvPreset, "name">;
+}
+
+export interface PresetRemote {
+  list(): Promise<PresetRecord[]>;
+  save(body: PresetRecordBody, id?: string): Promise<PresetRecord>;
+  remove(id: string): Promise<void>;
+}
+
+export interface PresetLoadResult {
+  presets: CsvPreset[];
+  notice?: string;
+}
+
+export interface PresetStore {
+  /** "account" when presets sync to the signed-in user, "browser" otherwise. */
+  readonly scope: () => "account" | "browser";
+  load(): Promise<PresetLoadResult>;
+  save(preset: CsvPreset): Promise<{ presets: CsvPreset[]; replaced: boolean }>;
+  rename(oldName: string, newName: string): Promise<CsvPreset[]>;
+  remove(name: string): Promise<CsvPreset[]>;
+}
+
+export function presetToRecord(preset: CsvPreset): PresetRecordBody {
+  const { name, ...config } = preset;
+  return { name: name.trim(), name_key: presetKey(name), config };
+}
+
+export function presetFromRecord(record: PresetRecord): CsvPreset | null {
+  if (!isPlainObject(record) || typeof record.name !== "string") return null;
+  if (!isPlainObject(record.config)) return null;
+  return parsePresetEntry({ ...record.config, name: record.name });
+}
+
+function sortPresets<T extends { preset: CsvPreset }>(entries: T[]): T[] {
+  return [...entries].sort((a, b) =>
+    a.preset.name.localeCompare(b.preset.name, undefined, {
+      sensitivity: "base",
+    }),
+  );
+}
+
+/** Replaces the browser copy; an empty list removes the key entirely. */
+export function replaceLocalPresets(
+  storage: PresetStorage | null | undefined,
+  presets: CsvPreset[],
+): boolean {
+  if (!storage) return false;
+  if (presets.length) return writePresets(storage, presets);
+  try {
+    if (storage.removeItem) storage.removeItem(PRESET_STORAGE_KEY);
+    else
+      storage.setItem(
+        PRESET_STORAGE_KEY,
+        JSON.stringify({ version: 1, presets: [] }),
+      );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function createLocalPresetStore(
+  storage: PresetStorage | null | undefined,
+): PresetStore {
+  return {
+    scope: () => "browser",
+    async load() {
+      return { presets: loadPresets(storage) };
+    },
+    async save(preset) {
+      const result = savePreset(storage, preset);
+      if (!result.persisted) throw new Error(STORAGE_WRITE_ERROR);
+      return { presets: result.presets, replaced: !!result.replaced };
+    },
+    async rename(oldName, newName) {
+      const result = renamePreset(storage, oldName, newName);
+      if (!result.persisted) throw new Error(STORAGE_WRITE_ERROR);
+      return result.presets;
+    },
+    async remove(name) {
+      const result = deletePreset(storage, name);
+      if (!result.persisted) throw new Error(STORAGE_WRITE_ERROR);
+      return result.presets;
+    },
+  };
+}
+
+function isMissingCollectionError(e: unknown): boolean {
+  return (
+    e instanceof Error && e.message.includes("Install the PocketBase migration")
+  );
+}
+
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * Presets stored in the user's account. On load, any presets left in browser
+ * storage are uploaded (names already in the account win) and then removed from
+ * the browser so they are not imported into a different account later. If the
+ * server has not been upgraded yet, it falls back to browser storage.
+ */
+export function createAccountPresetStore(
+  remote: PresetRemote,
+  storage: PresetStorage | null | undefined,
+): PresetStore {
+  type Entry = { id: string; preset: CsvPreset };
+  let entries: Entry[] = [];
+  let fallback: PresetStore | null = null;
+  const list = () => entries.map((e) => e.preset);
+  const find = (name: string) =>
+    entries.find((e) => presetKey(e.preset.name) === presetKey(name));
+  const accept = (record: PresetRecord): Entry => {
+    const preset = presetFromRecord(record);
+    if (!preset) throw new Error("The server returned an invalid preset.");
+    return { id: record.id, preset };
+  };
+
+  async function migrateLocal(): Promise<string | undefined> {
+    const local = loadPresets(storage);
+    if (!local.length) return undefined;
+    const known = new Set(entries.map((e) => presetKey(e.preset.name)));
+    const failed: CsvPreset[] = [];
+    let imported = 0;
+    let skipped = 0;
+    for (const preset of local) {
+      const key = presetKey(preset.name);
+      if (known.has(key)) {
+        skipped++;
+        continue;
+      }
+      try {
+        entries.push(accept(await remote.save(presetToRecord(preset))));
+        known.add(key);
+        imported++;
+      } catch {
+        failed.push(preset);
+      }
+    }
+    replaceLocalPresets(storage, failed);
+    entries = sortPresets(entries);
+    const parts: string[] = [];
+    if (imported)
+      parts.push(
+        `Moved ${plural(imported, "preset")} from this browser to your account.`,
+      );
+    if (skipped)
+      parts.push(
+        `${plural(skipped, "browser preset")} matched names already in your account and ${skipped === 1 ? "was" : "were"} not copied.`,
+      );
+    if (failed.length)
+      parts.push(
+        `${plural(failed.length, "preset")} could not be uploaded and will be retried next time.`,
+      );
+    return parts.join(" ") || undefined;
+  }
+
+  return {
+    scope: () => (fallback ? "browser" : "account"),
+    async load() {
+      let records: PresetRecord[];
+      try {
+        records = await remote.list();
+      } catch (e) {
+        if (!isMissingCollectionError(e)) throw e;
+        fallback = createLocalPresetStore(storage);
+        const result = await fallback.load();
+        return {
+          ...result,
+          notice:
+            "Presets are saved in this browser only until the server's preset migration is installed.",
+        };
+      }
+      fallback = null;
+      const seen = new Set<string>();
+      entries = [];
+      for (const record of records) {
+        const preset = presetFromRecord(record);
+        if (!preset) continue;
+        const key = presetKey(preset.name);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        entries.push({ id: record.id, preset });
+      }
+      entries = sortPresets(entries);
+      const notice = await migrateLocal();
+      return { presets: list(), notice };
+    },
+    async save(preset) {
+      if (fallback) return fallback.save(preset);
+      const valid = parsePresetEntry(preset);
+      if (!valid) throw new Error("Invalid preset configuration.");
+      const existing = find(valid.name);
+      const saved = accept(
+        await remote.save(presetToRecord(valid), existing?.id),
+      );
+      entries = sortPresets(
+        existing
+          ? entries.map((e) => (e === existing ? saved : e))
+          : [...entries, saved],
+      );
+      return { presets: list(), replaced: !!existing };
+    },
+    async rename(oldName, newName) {
+      if (fallback) return fallback.rename(oldName, newName);
+      const nameError = validatePresetName(newName, list(), {
+        excludeName: oldName,
+      });
+      if (nameError) throw new Error(nameError);
+      const existing = find(oldName);
+      if (!existing) throw new Error("Preset not found.");
+      const saved = accept(
+        await remote.save(
+          presetToRecord({ ...existing.preset, name: newName.trim() }),
+          existing.id,
+        ),
+      );
+      entries = sortPresets(entries.map((e) => (e === existing ? saved : e)));
+      return list();
+    },
+    async remove(name) {
+      if (fallback) return fallback.remove(name);
+      const existing = find(name);
+      if (!existing) return list();
+      await remote.remove(existing.id);
+      entries = entries.filter((e) => e !== existing);
+      return list();
+    },
+  };
 }

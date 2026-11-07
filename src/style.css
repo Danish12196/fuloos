@@ -2220,7 +2220,8 @@ button {
 .csv-preset-banner .csv-category-actions {
   margin: 0;
 }
-.csv-presets > p[role="status"]:not(.notice) {
+.csv-presets > p[role="status"]:not(.notice),
+.csv-presets > p.csv-preset-scope {
   margin-top: 10px;
 }
 
