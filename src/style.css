@@ -3966,3 +3966,10 @@ button.compact-name:hover b {
 .tx-relaxed-sort label {
   white-space: nowrap;
 }
+button.small-avatar {
+  border: 0;
+  padding: 0;
+}
+button.small-avatar:hover {
+  box-shadow: 0 0 0 3px var(--active-surface);
+}

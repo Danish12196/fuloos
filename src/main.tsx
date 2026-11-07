@@ -1359,9 +1359,15 @@ function App() {
             <span className="currency-pill">
               AED <span>United Arab Emirates</span>
             </span>
-            <span className="small-avatar">
+            <button
+              type="button"
+              className="small-avatar"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => setSettingsOpen(true)}
+            >
               {demo ? "D" : session?.user.email?.slice(0, 1).toUpperCase()}
-            </span>
+            </button>
           </div>
         </header>
         <div className="content">
