@@ -13,6 +13,13 @@ import { ConfirmHost } from "./ConfirmHost";
 import { confirmDialog } from "./dialogStore";
 import { DeleteMoneyAccountDialog } from "./DeleteMoneyAccount";
 import { applyAccountDeletion, planAccountDeletion } from "./accountDeletion";
+import { DeleteCategoriesDialog } from "./DeleteCategories";
+import {
+  applyCategoryDeletion,
+  movedTransactions,
+  planCategoryDeletion,
+  validateMoveTarget,
+} from "./categoryDeletion";
 import { CsvImport } from "./CsvImport";
 import { SmsImport } from "./SmsImport";
 import { QueueDock, useLeaveWarning, useQueue } from "./QueueDock";
@@ -159,6 +166,12 @@ function App() {
   const [density] = useDensity();
   const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(
+    new Set(),
+  );
+  const [categoriesToDelete, setCategoriesToDelete] = useState<string[] | null>(
+    null,
+  );
   const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
   const [recurringModal, setRecurringModal] = useState<{
     open: true;
@@ -236,6 +249,8 @@ function App() {
   );
   useEffect(() => {
     setSelected(new Set());
+    setSelectedCategories(new Set());
+    setCategoriesToDelete(null);
     setBudgetModal(null);
     setBulkItems(null);
     setRecurringModal(null);
@@ -244,6 +259,14 @@ function App() {
     setRecurringFilter("all");
     queue.cancelQueued();
   }, [session?.user.id, demo]);
+  function toggleCategory(id: string) {
+    setSelectedCategories((old) => {
+      const next = new Set(old);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   function toggleSelection(id: string) {
     setSelected((old) => {
       const next = new Set(old);
@@ -1109,9 +1132,114 @@ function App() {
     // Take the account off the screen straight away; a failure reloads the ledger.
     setLedger((l) => applyAccountDeletion(l, account.id, plan));
     const removed = new Set(plan.transactionIds);
+    for (const id of removed) savedTx.current.delete(id);
     setSelected((old) => new Set([...old].filter((v) => !removed.has(v))));
     if (accountFilter === account.id) setAccountFilter("");
     setAccountToDelete(null);
+  }
+  /**
+   * Deletes categories in the background queue. Their transactions and
+   * recurring schedules move to `target` (null = uncategorized) first, because
+   * the server refuses to delete a category that is still in use; their
+   * budgets are deleted with them by the server.
+   */
+  function deleteCategories(ids: string[], target: string | null) {
+    const first = planCategoryDeletion(ledger, ids);
+    if (!first.categoryIds.length) throw new Error("Nothing to delete.");
+    validateMoveTarget(ledger, first, target);
+    const done = () => {
+      const gone = new Set(first.categoryIds);
+      setSelectedCategories(
+        (old) => new Set([...old].filter((id) => !gone.has(id))),
+      );
+      setCategoriesToDelete(null);
+    };
+    if (demo) {
+      setLedger((l) =>
+        applyCategoryDeletion(l, planCategoryDeletion(l, ids), target),
+      );
+      done();
+      return;
+    }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    const n = first.categoryIds.length;
+    const total = first.transactionIds.length + first.recurringIds.length + n;
+    queue.enqueue({
+      label: `Delete ${n} ${n === 1 ? "category" : "categories"}`,
+      total,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        // Plan again when the task starts: earlier queued work may have
+        // added transactions to these categories since.
+        // Include records an earlier task saved that React hasn't rendered yet.
+        const current = ledgerRef.current;
+        const fresh = new Map(current.transactions.map((t) => [t.id, t]));
+        for (const [id, t] of savedTx.current) fresh.set(id, t);
+        const latest: Ledger = {
+          ...current,
+          transactions: [...fresh.values()],
+        };
+        const plan = planCategoryDeletion(latest, ids);
+        if (!plan.categoryIds.length) return;
+        validateMoveTarget(latest, plan, target);
+        let saved = 0;
+        try {
+          const moved = movedTransactions(latest, plan, target);
+          if (moved.length)
+            await api.updateTransactions(
+              moved,
+              (count, records) => {
+                if (!stillOwner()) return;
+                updateTransactions(records);
+                ctx.progress(Math.min(total, count));
+              },
+              stillOwner,
+            );
+          saved = moved.length;
+          for (const id of plan.recurringIds) {
+            checkOwner(stillOwner);
+            const schedule = (ledgerRef.current.recurring ?? []).find(
+              (r) => r.id === id,
+            );
+            if (!schedule) continue;
+            const { id: _id, ...value } = schedule;
+            const record = await api.save(
+              "recurring",
+              { ...value, category_id: target },
+              id,
+            );
+            if (!stillOwner()) return;
+            setLedger((l) => ({
+              ...l,
+              recurring: (l.recurring ?? []).map((r) =>
+                r.id === id ? record : r,
+              ),
+            }));
+            ctx.progress(Math.min(total, ++saved));
+          }
+          checkOwner(stillOwner);
+          await api.removeMany("categories", plan.categoryIds, (deleted) => {
+            if (!stillOwner()) return;
+            const gone = new Set(deleted);
+            setLedger((l) => ({
+              ...l,
+              categories: l.categories.filter((c) => !gone.has(c.id)),
+              budgets: (l.budgets ?? []).filter(
+                (b) => !gone.has(b.category_id),
+              ),
+            }));
+            saved += deleted.length;
+            ctx.progress(Math.min(total, saved));
+          });
+        } catch (e) {
+          if (stillOwner()) await load();
+          throw e;
+        }
+      },
+    });
+    done();
   }
   async function remove(
     table: "categories" | "transactions" | "recurring" | "budgets",
@@ -1191,6 +1319,7 @@ function App() {
         if (!backend || !session) throw new Error("Please sign in.");
         const current = generation.current;
         await backend.remove(table, id);
+        if (table === "transactions") savedTx.current.delete(id);
         if (current !== generation.current) return;
         setLedger(applyRemoval);
         setSelected((old) => new Set([...old].filter((value) => value !== id)));
@@ -1386,6 +1515,19 @@ function App() {
           plan={planAccountDeletion(ledger, accountToDelete.id)}
           onClose={() => setAccountToDelete(null)}
           onDelete={() => deleteMoneyAccount(accountToDelete)}
+        />
+      )}
+      {categoriesToDelete && (
+        <DeleteCategoriesDialog
+          categories={ledger.categories.filter((c) =>
+            categoriesToDelete.includes(c.id),
+          )}
+          plan={planCategoryDeletion(ledger, categoriesToDelete)}
+          remaining={ledger.categories.filter(
+            (c) => !categoriesToDelete.includes(c.id),
+          )}
+          onClose={() => setCategoriesToDelete(null)}
+          onDelete={(target) => deleteCategories(categoriesToDelete, target)}
         />
       )}
       <main>
@@ -1964,6 +2106,61 @@ function App() {
               )}
             </>
           )}
+          {page === "Categories" && ledger.categories.length > 0 && (
+            <div className="panel bulk-toolbar category-toolbar">
+              <label className="selection-label">
+                <input
+                  type="checkbox"
+                  disabled={busy}
+                  checked={
+                    selectedCategories.size > 0 &&
+                    ledger.categories.every((c) => selectedCategories.has(c.id))
+                  }
+                  ref={(el) => {
+                    if (el)
+                      el.indeterminate =
+                        selectedCategories.size > 0 &&
+                        !ledger.categories.every((c) =>
+                          selectedCategories.has(c.id),
+                        );
+                  }}
+                  onChange={(e) =>
+                    setSelectedCategories(
+                      e.target.checked
+                        ? new Set(ledger.categories.map((c) => c.id))
+                        : new Set(),
+                    )
+                  }
+                />
+                Select all
+              </label>
+              <span className="muted small">
+                {selectedCategories.size} selected
+              </span>
+              <button
+                className="secondary danger-outline"
+                disabled={busy || !selectedCategories.size}
+                onClick={() =>
+                  setCategoriesToDelete(
+                    ledger.categories
+                      .filter((c) => selectedCategories.has(c.id))
+                      .map((c) => c.id),
+                  )
+                }
+              >
+                <Trash2 size={15} /> Delete selected
+              </button>
+              {selectedCategories.size > 0 && (
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => setSelectedCategories(new Set())}
+                >
+                  Clear selection
+                </button>
+              )}
+            </div>
+          )}
           {page === "Categories" && density === "compact" && (
             <section className="panel compact-list">
               <div className="compact-head categories" aria-hidden>
@@ -1973,8 +2170,19 @@ function App() {
                 <span />
               </div>
               {ledger.categories.map((c) => (
-                <div className="compact-row categories" key={c.id}>
+                <div
+                  className={`compact-row categories ${selectedCategories.has(c.id) ? "is-selected" : ""}`}
+                  key={c.id}
+                >
                   <span className="compact-name">
+                    <input
+                      type="checkbox"
+                      className="transaction-select category-select"
+                      aria-label={`Select ${c.name}`}
+                      disabled={busy}
+                      checked={selectedCategories.has(c.id)}
+                      onChange={() => toggleCategory(c.id)}
+                    />
                     <span
                       className="compact-symbol"
                       style={{ color: c.color, background: c.color + "18" }}
@@ -2001,7 +2209,7 @@ function App() {
                       className="icon-button"
                       disabled={busy}
                       aria-label={`Delete ${c.name}`}
-                      onClick={() => void remove("categories", c.id)}
+                      onClick={() => setCategoriesToDelete([c.id])}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -2019,8 +2227,19 @@ function App() {
           {page === "Categories" && density === "relaxed" && (
             <div className="account-grid full category-cards">
               {ledger.categories.map((c) => (
-                <article className="account-card" key={c.id}>
+                <article
+                  className={`account-card ${selectedCategories.has(c.id) ? "is-selected" : ""}`}
+                  key={c.id}
+                >
                   <div className="account-top">
+                    <input
+                      type="checkbox"
+                      className="transaction-select category-select"
+                      aria-label={`Select ${c.name}`}
+                      disabled={busy}
+                      checked={selectedCategories.has(c.id)}
+                      onChange={() => toggleCategory(c.id)}
+                    />
                     <span
                       className="account-symbol"
                       style={{ background: c.color + "18", color: c.color }}
@@ -2039,7 +2258,7 @@ function App() {
                         className="icon-button"
                         disabled={busy}
                         aria-label={`Delete ${c.name}`}
-                        onClick={() => void remove("categories", c.id)}
+                        onClick={() => setCategoriesToDelete([c.id])}
                       >
                         <Trash2 size={15} />
                       </button>

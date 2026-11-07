@@ -3648,6 +3648,84 @@ button {
   }
 }
 
+/* Categories: multi-select and bulk delete */
+.category-toolbar {
+  padding: 12px 23px;
+  border-top: 1px solid var(--line);
+}
+.category-toolbar .danger-outline {
+  margin-left: auto;
+  padding: 9px 14px;
+}
+.category-toolbar .text-button + .danger-outline,
+.category-toolbar .danger-outline + .text-button {
+  margin-left: 0;
+}
+.secondary.danger-outline:not(:disabled) {
+  color: #9e493e;
+}
+:root[data-theme="dark"] .secondary.danger-outline:not(:disabled) {
+  color: #f0a597;
+}
+.category-toolbar {
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+}
+.category-select.transaction-select {
+  margin: 0;
+}
+.compact-row.categories.is-selected,
+.category-cards .account-card.is-selected {
+  background: var(--active-surface);
+}
+.category-cards .account-top .category-select {
+  margin-right: 6px;
+}
+.category-cards .account-top .account-symbol {
+  margin-right: auto;
+}
+.delete-categories-names {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.delete-categories-names li {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--soft-surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.delete-categories-names li.more {
+  color: var(--muted);
+  font-weight: 500;
+}
+.delete-categories .typed-confirm-list {
+  margin-top: 14px;
+}
+.delete-categories .typed-confirm-list .danger-text {
+  color: #9e493e;
+  font-weight: 600;
+}
+:root[data-theme="dark"] .delete-categories .typed-confirm-list .danger-text {
+  color: #f0a597;
+}
+.delete-categories label {
+  margin-bottom: 0;
+}
+.delete-categories .delete-categories-final {
+  text-align: center;
+}
+@media (max-width: 560px) {
+  .category-toolbar .danger-outline {
+    margin-left: 0;
+  }
+}
 /* Settings dialog */
 .settings-modal {
   width: 520px;
