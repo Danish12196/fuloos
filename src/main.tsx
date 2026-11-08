@@ -14,6 +14,11 @@ import { confirmDialog } from "./dialogStore";
 import { DeleteMoneyAccountDialog } from "./DeleteMoneyAccount";
 import { applyAccountDeletion, planAccountDeletion } from "./accountDeletion";
 import { DeleteCategoriesDialog } from "./DeleteCategories";
+import { DeleteTransactionsDialog } from "./DeleteTransactions";
+import {
+  applyTransactionDeletion,
+  planTransactionDeletion,
+} from "./transactionDeletion";
 import {
   applyCategoryDeletion,
   movedTransactions,
@@ -179,6 +184,9 @@ function App() {
     null,
   );
   const [bulkItems, setBulkItems] = useState<Transaction[] | null>(null);
+  const [transactionsToDelete, setTransactionsToDelete] = useState<
+    string[] | null
+  >(null);
   const [recurringModal, setRecurringModal] = useState<{
     open: true;
     item?: RecurringSchedule;
@@ -257,6 +265,7 @@ function App() {
     setSelected(new Set());
     setSelectedCategories(new Set());
     setCategoriesToDelete(null);
+    setTransactionsToDelete(null);
     setBudgetModal(null);
     setBulkItems(null);
     setRecurringModal(null);
@@ -1247,6 +1256,54 @@ function App() {
     });
     done();
   }
+  /**
+   * Deletes several transactions in the background queue. They leave the
+   * screen at once; a failure reloads the ledger to show what is left. A
+   * transfer is one record, so both of its sides go together, and the server
+   * unlinks any recurring occurrences recorded with them.
+   */
+  function deleteTransactions(ids: string[]) {
+    const plan = planTransactionDeletion(ledger, ids);
+    const n = plan.transactionIds.length;
+    if (!n) throw new Error("Nothing to delete.");
+    const finish = () => {
+      const gone = new Set(plan.transactionIds);
+      for (const id of gone) savedTx.current.delete(id);
+      setLedger((l) => applyTransactionDeletion(l, gone));
+      setSelected((old) => new Set([...old].filter((id) => !gone.has(id))));
+      setTransactionsToDelete(null);
+    };
+    if (demo) {
+      finish();
+      return;
+    }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    queue.enqueue({
+      label: `Delete ${n} ${n === 1 ? "transaction" : "transactions"}`,
+      total: n,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        let done = 0;
+        try {
+          await api.removeMany("transactions", plan.transactionIds, (gone) => {
+            for (const id of gone) savedTx.current.delete(id);
+            done += gone.length;
+            ctx.progress(done);
+          });
+          // An earlier queued save may have put a deleted record back on screen.
+          if (stillOwner())
+            setLedger((l) => applyTransactionDeletion(l, plan.transactionIds));
+        } catch (e) {
+          // Some records may already be gone; show what is left on the server.
+          if (stillOwner()) await load();
+          throw e;
+        }
+      },
+    });
+    finish();
+  }
   async function remove(
     table: "categories" | "transactions" | "recurring" | "budgets",
     id: string,
@@ -1544,6 +1601,19 @@ function App() {
           )}
           onClose={() => setCategoriesToDelete(null)}
           onDelete={(target) => deleteCategories(categoriesToDelete, target)}
+        />
+      )}
+      {transactionsToDelete && (
+        <DeleteTransactionsDialog
+          transactions={ledger.transactions
+            .filter((t) => transactionsToDelete.includes(t.id))
+            .sort((a, b) => b.date.localeCompare(a.date))}
+          plan={planTransactionDeletion(ledger, transactionsToDelete)}
+          accounts={ledger.accounts}
+          categories={ledger.categories}
+          hidden={hidden}
+          onClose={() => setTransactionsToDelete(null)}
+          onDelete={() => deleteTransactions(transactionsToDelete)}
         />
       )}
       <main>
@@ -2318,6 +2388,9 @@ function App() {
               onImport={() => setImportOpen(true)}
               onImportSms={() => setSmsOpen(true)}
               onEditSelected={setBulkItems}
+              onDeleteSelected={(items) =>
+                setTransactionsToDelete(items.map((t) => t.id))
+              }
               onEdit={(t) => setModal({ kind: "transaction", item: t })}
               onDelete={(t) => void remove("transactions", t.id)}
               onCategorize={(t, categoryId) => void categorize(t, categoryId)}

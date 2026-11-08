@@ -70,6 +70,7 @@ export function TransactionsPanel({
   onImport,
   onImportSms,
   onEditSelected,
+  onDeleteSelected,
   onEdit,
   onDelete,
   onCategorize,
@@ -91,6 +92,7 @@ export function TransactionsPanel({
   onImport: () => void;
   onImportSms: () => void;
   onEditSelected: (items: Transaction[]) => void;
+  onDeleteSelected: (items: Transaction[]) => void;
   onEdit: (t: Transaction) => void;
   onDelete: (t: Transaction) => void;
   onCategorize: (t: Transaction, categoryId: string) => void;
@@ -497,6 +499,17 @@ export function TransactionsPanel({
           }
         >
           Edit selected
+        </button>
+        <button
+          className="secondary danger-outline"
+          disabled={busy || loading || !selected.size}
+          onClick={() =>
+            onDeleteSelected(
+              ledger.transactions.filter((t) => selected.has(t.id)),
+            )
+          }
+        >
+          <Trash2 size={15} /> Delete selected
         </button>
         <button
           className="text-button"
