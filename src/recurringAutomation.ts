@@ -23,6 +23,22 @@ import {
   occurrenceAtStep,
   parseIsoDate,
 } from "./recurring.ts";
+import {
+  AMOUNT_BAND,
+  CADENCE_RULES,
+  amountInBand,
+  buildChains,
+  chainMedianAmount,
+  chainStats,
+  cyclesForGap,
+  daysBetween as fastDaysBetween,
+  joinChains,
+  medianOf,
+  seriesHasEnded,
+  textSimilarity,
+  textTokens,
+  type SeriesChain,
+} from "./recurringSeries.ts";
 
 export const MAX_DETECTION_TRANSACTIONS = 5000;
 export const DETECTION_BATCH_SIZE = 500;
@@ -40,6 +56,7 @@ export type RecurringCategoryHint =
   | "salary"
   | "insurance"
   | "membership"
+  | "loan"
   | "other_recurring";
 
 export interface NormalizedMerchant {
@@ -64,6 +81,8 @@ export interface PatternFeatures {
   isExactFixed: boolean;
   accountConsistency: number;
   categoryName: string;
+  /** Sample payee/notes text from the payments, used for hints such as "subscription". */
+  descriptionText?: string;
 }
 
 export interface PatternClassification {
@@ -95,6 +114,12 @@ export interface DetectedPattern {
   accountId: string;
   categoryId: string | null;
   nextExpectedDate: string;
+  /** "ended" when payments stopped; accepting it records the series as history. */
+  status: "active" | "ended";
+  firstDate: string;
+  lastDate: string;
+  /** Other merchant names the same series was billed under. */
+  aliases: string[];
   explanation: string;
   supportingTransactions: Transaction[];
   draftSchedule: Omit<RecurringSchedule, "id">;
@@ -242,6 +267,13 @@ const NOISE_WORDS = new Set([
   "bill",
   "inv",
   "invoice",
+  "subscription",
+  "subscriptions",
+  "membership",
+  "monthly",
+  "yearly",
+  "annual",
+  "renewal",
   "cheque",
   "chq",
   "jan",
@@ -417,6 +449,18 @@ const CANONICAL_ALIASES: CanonicalAlias[] = [
     hint: "subscription",
   },
   {
+    match: (_j, t) => t.includes("anthropic") || (t.includes("claude") && t.includes("ai")),
+    key: "anthropic",
+    displayName: "Anthropic / Claude",
+    hint: "subscription",
+  },
+  {
+    match: (_j, t) => t.includes("patreon"),
+    key: "patreon",
+    displayName: "Patreon",
+    hint: "subscription",
+  },
+  {
     match: (_j, t) => t.includes("salik"),
     key: "salik",
     displayName: "Salik",
@@ -528,13 +572,18 @@ export function merchantSimilarity(
   return union > 0 ? Math.min(1, overlap / union) : 0;
 }
 
+/** Services that bill on a subscription, used to label detected series. */
+const SUBSCRIPTION_BRANDS =
+  /\b(patreon|anthropic|claude|openai|chatgpt|github|notion|adobe|microsoft|xbox|playstation|nintendo|disney|osn|shahid|starzplay|audible|kindle|duolingo|linkedin|canva|dropbox|proton|nordvpn|expressvpn|midjourney|perplexity|youtube|twitch|crunchyroll|hbo|paramount|deezer|tidal|substack|medium|godaddy|namecheap|vercel|cloudflare|digitalocean|icloud|onedrive|mubi)\b/;
+
 export function inferCategoryHint(
   merchant: NormalizedMerchant,
   type: RecurringKind,
   categoryName: string,
+  descriptionText = "",
 ): RecurringCategoryHint {
   if (merchant.canonicalHint) return merchant.canonicalHint;
-  const text = `${merchant.key} ${categoryName.toLowerCase()}`;
+  const text = `${merchant.key} ${categoryName.toLowerCase()} ${descriptionText.toLowerCase()}`;
   if (type === "income" && /\b(salary|payroll|wage|stipend)\b/.test(text))
     return "salary";
   if (/\b(rent|landlord|ejari|lease|property|hoa|service charge)\b/.test(text))
@@ -545,30 +594,33 @@ export function inferCategoryHint(
     return "telecom";
   if (/\b(insurance|takaful|medical|health policy)\b/.test(text))
     return "insurance";
-  if (/\b(gym|fitness|club|membership)\b/.test(text)) return "membership";
+  if (/\b(install?ments?|loan|emi|financing|mortgage)\b/.test(text)) return "loan";
+  if (SUBSCRIPTION_BRANDS.test(text)) return "subscription";
+  if (/\b(gym|fitness)\b/.test(text)) return "membership";
   if (
-    /\b(subscription|plus|premium|cloud|stream|music|video|software|saas)\b/.test(
+    /\b(subscriptions?|membership|monthly|plus|premium|pro|cloud|stream|streaming|music|video|software|saas|patreon)\b/.test(
       text,
     )
   )
     return "subscription";
+  if (/\bclub\b/.test(text)) return "membership";
   return type === "income" ? "salary" : "other_recurring";
 }
 
 export const defaultDeterministicClassifier: PatternClassifier = {
   classify(f: PatternFeatures): PatternClassification {
-    const tol =
-      f.frequency === "weekly"
-        ? 3
-        : f.frequency === "monthly"
-          ? 6
-          : f.frequency === "quarterly"
-            ? 10
-            : 16;
-
+    // Bills paid by hand drift by days or weeks; subscriptions barely move.
+    const driftTolerance = {
+      weekly: { mean: 1.5, max: 2 },
+      monthly: { mean: 10, max: 16 },
+      quarterly: { mean: 12, max: 25 },
+      yearly: { mean: 15, max: 35 },
+    }[f.frequency];
     const intervalScore = Math.max(
       0,
-      1 - (f.meanResidualDays / tol) * 0.65 - (f.maxResidualDays / tol) * 0.2,
+      1 -
+        Math.min(1, f.meanResidualDays / driftTolerance.mean) * 0.6 -
+        Math.min(1, f.maxResidualDays / driftTolerance.max) * 0.15,
     );
 
     const baseObs =
@@ -608,6 +660,7 @@ export const defaultDeterministicClassifier: PatternClassifier = {
       f.merchant,
       f.type,
       f.categoryName,
+      f.descriptionText,
     );
     const domainBoost =
       categoryHint !== "other_recurring" && rawConfidence >= 0.55 ? 0.03 : 0;
@@ -677,208 +730,151 @@ function predominantValue<T extends string | null>(values: T[]): {
   };
 }
 
-interface CadenceFit {
-  frequency: DetectableFrequency;
-  anchorStart: string;
-  matched: { step: number; occurrenceDate: string; tx: Transaction; residual: number }[];
-  missedCycles: number;
-  offCycleCount: number;
-  meanResidualDays: number;
-  maxResidualDays: number;
+/** Text that identifies who a transaction was with: the payee, or the notes when there is no payee. */
+export function transactionLabel(tx: Pick<Transaction, "payee" | "notes">): string {
+  return tx.payee.trim() || tx.notes.trim();
 }
 
-const MAX_RESIDUAL_BY_FREQ: Record<DetectableFrequency, number> = {
-  weekly: 2,
-  monthly: 6,
-  quarterly: 10,
-  yearly: 16,
+const SERIES_ORDER: DetectableFrequency[] = [
+  "weekly",
+  "monthly",
+  "quarterly",
+  "yearly",
+];
+
+/** Fewest payments needed before a series is suggested. */
+const MIN_SERIES_PAYMENTS: Record<DetectableFrequency, { active: number; ended: number }> = {
+  weekly: { active: 4, ended: 6 },
+  monthly: { active: 3, ended: 4 },
+  quarterly: { active: 3, ended: 3 },
+  yearly: { active: 2, ended: 3 },
 };
 
-function candidateAnchorStarts(
-  sortedTxs: Transaction[],
-  frequency: DetectableFrequency,
-): string[] {
-  const first = parseIsoDate(sortedTxs[0].date);
-  if (!first) return [];
-  if (frequency === "weekly") {
-    const starts: string[] = [];
-    for (let offset = -3; offset <= 3; offset++) {
-      starts.push(addDays(sortedTxs[0].date, -7 + offset));
-    }
-    return starts;
-  }
+/** Fewest days a series must span. */
+const MIN_SERIES_SPAN: Record<DetectableFrequency, number> = {
+  weekly: 11,
+  monthly: 48,
+  quarterly: 155,
+  yearly: 340,
+};
 
-  const days = sortedTxs
-    .map((t) => parseIsoDate(t.date)?.day ?? 1)
-    .sort((a, b) => a - b);
-  const hasMonthEnd = sortedTxs.some((t) => {
-    const p = parseIsoDate(t.date);
-    return p ? p.day === daysInMonth(p.year, p.month) && p.day >= 28 : false;
-  });
-  const candidateDays = new Set<number>([
-    median(days),
-    days[days.length - 1],
-    days[0],
-  ]);
-  if (hasMonthEnd) candidateDays.add(31);
-
-  const starts = new Set<string>();
-  const monthOffsets =
-    frequency === "monthly"
-      ? [-1, 0]
-      : frequency === "quarterly"
-        ? [-3, -2, -1, 0]
-        : [-12, 0];
-
-  for (const mOff of monthOffsets) {
-    const totalMonths = first.year * 12 + (first.month - 1) + mOff;
-    const y = Math.floor(totalMonths / 12);
-    const m = (((totalMonths % 12) + 12) % 12) + 1;
-    if (y < 1970) continue;
-    for (const d of candidateDays) {
-      // Choose a starting month with full days when anchorDay is 29..31 so occurrenceAtStep preserves the high day anchor
-      if (d > daysInMonth(y, m)) {
-        const stepMonths =
-          frequency === "monthly" ? 1 : frequency === "quarterly" ? 3 : 12;
-        const prevTotal = totalMonths - stepMonths;
-        const py = Math.floor(prevTotal / 12);
-        const pm = (((prevTotal % 12) + 12) % 12) + 1;
-        if (py >= 1970 && d <= daysInMonth(py, pm)) {
-          starts.add(formatIsoDate(py, pm, d));
-          continue;
-        }
-      }
-      starts.add(formatIsoDate(y, m, Math.min(d, daysInMonth(y, m))));
-    }
-  }
-  return [...starts];
+interface DetectionGroup {
+  type: RecurringKind;
+  merchant: NormalizedMerchant;
+  txs: Transaction[];
 }
 
-function fitCadenceForCluster(
-  sortedTxs: Transaction[],
-  frequency: DetectableFrequency,
-): CadenceFit | null {
-  const minObs = frequency === "yearly" ? 2 : 3;
-  if (sortedTxs.length < minObs) return null;
+interface CandidateSeries {
+  frequency: DetectableFrequency;
+  chain: SeriesChain<Transaction>;
+  groups: DetectionGroup[];
+}
 
-  const spanDays = daysBetween(
-    sortedTxs[0].date,
-    sortedTxs[sortedTxs.length - 1].date,
-  );
-  const minSpan =
-    frequency === "weekly"
-      ? 11
-      : frequency === "monthly"
-        ? 48
-        : frequency === "quarterly"
-          ? 155
-          : 340;
-  if (spanDays < minSpan) return null;
-
-  const tol = MAX_RESIDUAL_BY_FREQ[frequency];
-  const anchorCandidates = candidateAnchorStarts(sortedTxs, frequency);
-  let best: CadenceFit | null = null;
-  let bestObjective = -Infinity;
-
-  for (const anchorStart of anchorCandidates) {
-    const byStep = new Map<
-      number,
-      { step: number; occurrenceDate: string; tx: Transaction; residual: number }
-    >();
-    let offCycleCount = 0;
-
-    for (const tx of sortedTxs) {
-      const kAfter = firstStepOnOrAfter(anchorStart, frequency, tx.date);
-      const occAfter = occurrenceAtStep(anchorStart, frequency, kAfter);
-      let chosenStep = kAfter;
-      let chosenOcc = occAfter;
-      let chosenRes = Math.abs(daysBetween(occAfter, tx.date));
-
-      if (kAfter > 0) {
-        const occBefore = occurrenceAtStep(anchorStart, frequency, kAfter - 1);
-        const resBefore = Math.abs(daysBetween(occBefore, tx.date));
-        if (resBefore < chosenRes) {
-          chosenStep = kAfter - 1;
-          chosenOcc = occBefore;
-          chosenRes = resBefore;
-        }
-      }
-
-      if (chosenRes <= tol) {
-        const existing = byStep.get(chosenStep);
-        if (!existing) {
-          byStep.set(chosenStep, {
-            step: chosenStep,
-            occurrenceDate: chosenOcc,
-            tx,
-            residual: chosenRes,
-          });
-        } else {
-          offCycleCount++;
-          if (chosenRes < existing.residual) {
-            byStep.set(chosenStep, {
-              step: chosenStep,
-              occurrenceDate: chosenOcc,
-              tx,
-              residual: chosenRes,
-            });
-          }
-        }
-      } else {
-        offCycleCount++;
-      }
-    }
-
-    const matched = [...byStep.values()].sort((a, b) => a.step - b.step);
-    if (matched.length < minObs) continue;
-
-    // Verify step gaps: allow at most 1 missed cycle in a row (step delta <= 2)
-    let maxStepGap = 1;
-    for (let i = 1; i < matched.length; i++) {
-      const gap = matched[i].step - matched[i - 1].step;
-      if (gap > maxStepGap) maxStepGap = gap;
-    }
-    if (maxStepGap > 2) continue;
-
-    const expectedSpanSteps =
-      matched[matched.length - 1].step - matched[0].step + 1;
-    const missedCycles = expectedSpanSteps - matched.length;
-    if (missedCycles > Math.floor(matched.length * 0.5)) continue;
-    if (offCycleCount > Math.max(1, Math.floor(matched.length * 0.35)))
-      continue;
-
-    const meanResidualDays =
-      matched.reduce((s, m) => s + m.residual, 0) / matched.length;
-    const maxResidualDays = matched.reduce(
-      (mx, m) => Math.max(mx, m.residual),
-      0,
-    );
-
-    const objective =
-      matched.length * 4 -
-      missedCycles * 2.5 -
-      offCycleCount * 3 -
-      meanResidualDays * 0.6;
-    if (objective > bestObjective) {
-      bestObjective = objective;
-      best = {
-        frequency,
-        anchorStart,
-        matched,
-        missedCycles,
-        offCycleCount,
-        meanResidualDays,
-        maxResidualDays,
-      };
-    }
-  }
-
-  return best;
+function sameDayOfCycle(a: string, b: string, frequency: DetectableFrequency): boolean {
+  if (frequency === "weekly") return true;
+  const pa = parseIsoDate(a);
+  const pb = parseIsoDate(b);
+  if (!pa || !pb) return false;
+  const diff = Math.abs(pa.day - pb.day);
+  return Math.min(diff, 31 - diff) <= 4;
 }
 
 /**
- * Analyzes historical ledger transactions in bounded batches to discover
- * weekly, monthly, quarterly, and yearly recurring expenses and income.
+ * Two chains from different merchant names are one subscription that was
+ * renamed on the statement (for example a creator's page later billed as the
+ * platform's generic "membership") when the second starts one cycle after the
+ * first stops, on the same day of the month, for the same amount.
+ */
+function isContinuation(
+  a: CandidateSeries,
+  b: CandidateSeries,
+): boolean {
+  if (a.frequency !== b.frequency) return false;
+  const lastA = a.chain.members[a.chain.members.length - 1].item;
+  const firstB = b.chain.members[0].item;
+  if (firstB.date <= lastA.date) return false;
+  const gap = fastDaysBetween(lastA.date, firstB.date);
+  const cycles = cyclesForGap(gap, a.frequency);
+  if (cycles < 1 || cycles > 2) return false;
+  const sameMerchant = a.groups.some((g) => b.groups.includes(g));
+  if (sameMerchant) {
+    // A price change or pay rise: the next cycle continues at a new amount
+    // with the same description.
+    if (cycles !== 1) return false;
+    if (!amountInBand(firstB.amount, lastA.amount)) return false;
+    return (
+      textSimilarity(
+        textTokens(`${lastA.payee} ${lastA.notes}`),
+        textTokens(`${firstB.payee} ${firstB.notes}`),
+      ) >= 0.5
+    );
+  }
+  // Different names: only join steady amounts (a subscription price) that
+  // match closely, with a few payments on each side.
+  if (a.chain.members.length < 3 || b.chain.members.length < 2) return false;
+  const tailA = a.chain.members.slice(-3).map((m) => m.item.amount);
+  const headB = b.chain.members.slice(0, 3).map((m) => m.item.amount);
+  const steady = (xs: number[]) =>
+    Math.max(...xs) - Math.min(...xs) <= Math.max(...xs) * 0.02;
+  if (!steady(tailA) || !steady(headB)) return false;
+  const medA = medianOf(tailA);
+  const medB = medianOf(headB);
+  if (medA <= 0 || medB <= 0) return false;
+  if (Math.abs(medA - medB) / Math.max(medA, medB) > 0.02) return false;
+  return sameDayOfCycle(lastA.date, firstB.date, a.frequency);
+}
+
+function descriptionText(txs: Transaction[]): string {
+  return txs
+    .slice(-3)
+    .map((t) => `${t.payee} ${t.notes}`)
+    .join(" ");
+}
+
+/**
+ * True when the merchant or description says this is a bill, subscription,
+ * loan, salary or similar, rather than everyday spending.
+ */
+function hasRecurringSignal(
+  groupMerchant: NormalizedMerchant,
+  merchants: NormalizedMerchant[],
+  categoryName: string,
+  text: string,
+): boolean {
+  if (groupMerchant.canonicalHint && groupMerchant.canonicalHint !== "other_recurring") return true;
+  if (merchants.some((m) => m.canonicalHint && m.canonicalHint !== "other_recurring")) return true;
+  if (/\b(salary|payroll|wage|stipend|pension)\b/i.test(`${text} ${categoryName}`)) return true;
+  return (
+    inferCategoryHint(
+      { key: groupMerchant.key, displayName: "", tokens: groupMerchant.tokens },
+      "expense",
+      categoryName,
+      text,
+    ) !== "other_recurring"
+  );
+}
+
+function seriesKeySuffix(amount: number): string {
+  if (amount <= 0) return "0";
+  return String(Math.round(Math.log(amount) / Math.log(AMOUNT_BAND)));
+}
+
+function scheduleAliases(schedule: RecurringSchedule): string[] {
+  const aliases = [schedule.name];
+  for (const m of schedule.notes.matchAll(/"([^"]{1,80})"/g)) aliases.push(m[1]);
+  return aliases;
+}
+
+/**
+ * Analyzes historical ledger transactions to discover weekly, monthly,
+ * quarterly and yearly recurring expenses and income.
+ *
+ * Payments are grouped by merchant (payee, or the notes when the payee is
+ * empty), then split into drift-tolerant series: each series is a chain of
+ * payments roughly one cycle apart with amounts in a band, so a bill paid on
+ * a different day each month still counts, and two bills from the same
+ * provider stay separate. Series that stopped are reported with status
+ * "ended" so they can be kept as history.
  */
 export function detectRecurringPatterns(
   ledger: Ledger,
@@ -886,6 +882,8 @@ export function detectRecurringPatterns(
     asOfDate?: string;
     classifier?: PatternClassifier;
     minConfidence?: number;
+    /** Include series that have stopped (default true). */
+    includeEnded?: boolean;
   } = {},
 ): DetectedPattern[] {
   const prefs: RecurringPreferences =
@@ -895,29 +893,38 @@ export function detectRecurringPatterns(
   const asOfDate = options.asOfDate ?? today();
   const classifier = options.classifier ?? defaultDeterministicClassifier;
   const minConfidence = options.minConfidence ?? 0.55;
+  const includeEnded = options.includeEnded ?? true;
   const dismissed = new Set(prefs.dismissed_keys);
   const linkedTxIds = new Set(
     (ledger.recurring_occurrences ?? []).map((o) => o.transaction_id),
   );
 
-  // Bounded batch extraction of eligible historical transactions (most recent MAX_DETECTION_TRANSACTIONS)
+  // Latest date each account has data for. A series only counts as ended
+  // when its account has newer transactions, so an account whose statement
+  // has not been imported lately does not make everything look cancelled.
+  const accountHorizon = new Map<string, string>();
+  for (const t of ledger.transactions) {
+    if (t.date > asOfDate) continue;
+    const cur = accountHorizon.get(t.account_id);
+    if (!cur || t.date > cur) accountHorizon.set(t.account_id, t.date);
+  }
+
   const sortedCandidates = ledger.transactions
     .filter(
       (t) =>
         (t.type === "expense" || t.type === "income") &&
         !linkedTxIds.has(t.id) &&
-        t.payee.trim().length > 0,
+        t.date <= asOfDate &&
+        t.amount > 0 &&
+        transactionLabel(t).length > 0,
     )
     .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))
     .slice(-MAX_DETECTION_TRANSACTIONS);
 
-  interface MerchantCluster {
-    type: RecurringKind;
-    merchant: NormalizedMerchant;
-    txs: Transaction[];
-  }
-  const clusters: MerchantCluster[] = [];
-
+  const groups: DetectionGroup[] = [];
+  const groupByKey = new Map<string, DetectionGroup>();
+  const groupsByToken = new Map<string, DetectionGroup[]>();
+  const groupOfTx = new Map<string, DetectionGroup>();
   for (
     let offset = 0;
     offset < sortedCandidates.length;
@@ -926,114 +933,216 @@ export function detectRecurringPatterns(
     const batch = sortedCandidates.slice(offset, offset + DETECTION_BATCH_SIZE);
     for (const tx of batch) {
       const type = tx.type as RecurringKind;
-      const norm = normalizeMerchant(tx.payee);
+      const norm = normalizeMerchant(transactionLabel(tx));
       if (!norm.key) continue;
-
-      let target = clusters.find(
-        (c) => c.type === type && c.merchant.key === norm.key,
-      );
+      let target = groupByKey.get(`${type}:${norm.key}`);
       if (!target) {
-        target = clusters.find(
-          (c) =>
-            c.type === type && merchantSimilarity(c.merchant, norm) >= 0.85,
-        );
+        // Only merchants sharing a word (or a 4-letter prefix) can be similar.
+        const seen = new Set<DetectionGroup>();
+        for (const tok of norm.tokens) {
+          for (const g of groupsByToken.get(`${type}:${tok.slice(0, 4)}`) ?? []) {
+            if (seen.has(g)) continue;
+            seen.add(g);
+            if (merchantSimilarity(g.merchant, norm) >= 0.85) {
+              target = g;
+              break;
+            }
+          }
+          if (target) break;
+        }
+        if (target) groupByKey.set(`${type}:${norm.key}`, target);
       }
-      if (target) {
-        target.txs.push(tx);
-      } else {
-        clusters.push({ type, merchant: norm, txs: [tx] });
+      if (!target) {
+        target = { type, merchant: norm, txs: [] };
+        groups.push(target);
+        groupByKey.set(`${type}:${norm.key}`, target);
+        for (const tok of norm.tokens) {
+          const k = `${type}:${tok.slice(0, 4)}`;
+          const list = groupsByToken.get(k) ?? [];
+          list.push(target);
+          groupsByToken.set(k, list);
+        }
       }
+      target.txs.push(tx);
+      groupOfTx.set(tx.id, target);
     }
   }
 
   const existingSchedules = ledger.recurring ?? [];
+  const categoryNameFor = (txs: Transaction[]): string => {
+    const ids = txs
+      .map((t) => t.category_id)
+      .filter((c): c is string => c !== null);
+    if (!ids.length) return "";
+    const id = predominantValue(ids).value;
+    return ledger.categories.find((c) => c.id === id)?.name ?? "";
+  };
+  const consumed = new Set<string>();
   const results: DetectedPattern[] = [];
+  const usedKeys = new Set<string>();
 
-  for (const cluster of clusters) {
-    if (cluster.txs.length < 2) continue;
+  for (const frequency of SERIES_ORDER) {
+    // 1. Build chains per merchant from payments no earlier cadence claimed.
+    let candidates: CandidateSeries[] = [];
+    for (const group of groups) {
+      const free = group.txs.filter((t) => !consumed.has(t.id));
+      if (free.length < 2) continue;
+      for (const chain of buildChains(free, frequency, (t) => `${t.payee} ${t.notes}`)) {
+        candidates.push({ frequency, chain, groups: [group] });
+      }
+    }
 
-    // Evaluate all 4 detectable frequencies and pick highest-confidence valid fit
-    let bestCandidate: DetectedPattern | null = null;
+    // 2. Join renamed subscriptions and price changes into one series.
+    if (frequency !== "weekly") {
+      let joinable = candidates
+        .filter((c) => c.chain.members.length >= 2)
+        .sort((a, b) =>
+          a.chain.members[0].item.date.localeCompare(b.chain.members[0].item.date),
+        );
+      const removed = new Set<CandidateSeries>();
+      let merged = true;
+      while (merged) {
+        merged = false;
+        for (const a of joinable) {
+          if (removed.has(a)) continue;
+          const lastDate = a.chain.members[a.chain.members.length - 1].item.date;
+          for (const b of joinable) {
+            if (a === b || removed.has(b)) continue;
+            const firstB = b.chain.members[0].item.date;
+            if (firstB <= lastDate) continue;
+            if (fastDaysBetween(lastDate, firstB) > CADENCE_RULES[frequency].periodDays * 2.5) {
+              continue;
+            }
+            if (a.groups[0].type !== b.groups[0].type) continue;
+            if (
+              b.groups.some((g) => a.groups.includes(g)) &&
+              a.groups.length + b.groups.length > 2
+            ) {
+              continue;
+            }
+            if (!isContinuation(a, b)) continue;
+            a.chain = joinChains(a.chain, b.chain);
+            a.groups = [...new Set([...a.groups, ...b.groups])];
+            removed.add(b);
+            merged = true;
+            break;
+          }
+        }
+        joinable = joinable.filter((c) => !removed.has(c));
+      }
+      candidates = candidates.filter((c) => !removed.has(c));
+    }
 
-    for (const frequency of [
-      "monthly",
-      "weekly",
-      "quarterly",
-      "yearly",
-    ] as const) {
-      const patternKey = buildPatternKey(
-        cluster.type,
-        cluster.merchant.key,
-        frequency,
+    const minima = MIN_SERIES_PAYMENTS[frequency];
+    const viable = candidates.filter(
+      (c) => c.chain.members.length >= Math.min(minima.active, minima.ended),
+    );
+    const viableTxIds = new Set(
+      viable.flatMap((c) => c.chain.members.map((m) => m.item.id)),
+    );
+
+    // 3. Score each chain and turn the good ones into suggestions.
+    for (const cand of viable) {
+      const { chain } = cand;
+      const stats = chainStats(chain);
+      const memberTxs = chain.members.map((m) => m.item);
+      const memberIds = new Set(memberTxs.map((t) => t.id));
+      const type = cand.groups[0].type;
+      // Name the series after how its recent payments were labelled, so a
+      // merchant with several series ("Car - Loan", "Car - Fuel") keeps
+      // them apart, and a renamed subscription shows its current name.
+      const memberMerchants = memberTxs.map((t) => normalizeMerchant(transactionLabel(t)));
+      const recentKeys = memberMerchants.slice(-6).map((m) => m.key);
+      const { value: nameKey } = predominantValue(recentKeys);
+      const merchant =
+        [...memberMerchants].reverse().find((m) => m.key === nameKey) ??
+        cand.groups[0].merchant;
+
+      if (fastDaysBetween(stats.firstDate, stats.lastDate) < MIN_SERIES_SPAN[frequency]) continue;
+
+      const { value: accountId, share: accountConsistency } = predominantValue(
+        memberTxs.map((t) => t.account_id),
       );
-      if (dismissed.has(patternKey)) continue;
+      const lastAccount = memberTxs[memberTxs.length - 1].account_id;
+      const horizon = accountHorizon.get(lastAccount) ?? asOfDate;
+      const ended = seriesHasEnded(stats.lastDate, frequency, horizon < asOfDate ? horizon : asOfDate);
+      const needed = ended ? minima.ended : minima.active;
+      if (stats.count < needed) continue;
 
-      // Skip if an existing schedule already covers this merchant + type + frequency
-      const alreadyScheduled = existingSchedules.some(
-        (s) =>
-          s.type === cluster.type &&
-          s.frequency === frequency &&
-          merchantSimilarity(s.name, cluster.merchant) >= 0.78,
+      const knownRecurring = hasRecurringSignal(
+        cand.groups[0].merchant,
+        memberMerchants,
+        categoryNameFor(memberTxs),
+        descriptionText(memberTxs),
       );
-      if (alreadyScheduled) continue;
+      // Bills paid by hand are sometimes late enough to look like a skipped
+      // month, so known bills tolerate more gaps.
+      const maxMissedShare = knownRecurring ? 0.5 : 0.34;
+      if (stats.missedCycles > Math.floor(stats.count * maxMissedShare)) continue;
 
-      const fit = fitCadenceForCluster(cluster.txs, frequency);
-      if (!fit) continue;
+      // Other payments to the same merchant, in the same amount band, while
+      // the series ran. Lots of them means this is ordinary repeat shopping.
+      // A known subscription merchant may run several series side by side
+      // (two plans, or one for a family member), so payments that form their
+      // own series do not count against it.
+      const medianAmount = chainMedianAmount(chain, chain.members.length);
+      let competing = 0;
+      for (const g of cand.groups) {
+        for (const t of g.txs) {
+          if (memberIds.has(t.id) || t.date < stats.firstDate || t.date > stats.lastDate) continue;
+          if (knownRecurring && viableTxIds.has(t.id)) continue;
+          if (amountInBand(t.amount, medianAmount)) competing++;
+        }
+      }
+      if (competing > Math.max(1, Math.floor(stats.count * 0.35))) continue;
 
-      const matchedTxs = fit.matched.map((m) => m.tx);
-      const amounts = matchedTxs.map((t) => t.amount);
+      const amounts = memberTxs.map((t) => t.amount);
       const minAmount = Math.min(...amounts);
       const maxAmount = Math.max(...amounts);
-      const { mean, std, cv } = meanAndStd(amounts);
+      if (stats.amountCv > 0.45) continue;
+      if (frequency === "yearly" && stats.count === 2 && stats.amountCv > 0.12) continue;
+      // Short series of varying amounts and dates are too easy to hit by chance.
+      if (stats.count <= 4 && stats.amountCv > 0.2 && stats.meanDriftDays > CADENCE_RULES[frequency].toleranceDays / 3) continue;
+      // Without a steady amount, only accept bills and other known recurring
+      // kinds, or very regular monthly payments. This keeps a favourite
+      // restaurant or shop that happens to be visited monthly out.
+      const repeatedAmountShare = predominantValue(
+        memberTxs.map((t) => String(t.amount)),
+      ).share;
+      const steadyAmount = stats.amountCv <= 0.02 || repeatedAmountShare >= 0.6;
+      if (!steadyAmount && !knownRecurring) {
+        if (frequency !== "monthly" || stats.meanDriftDays > 2.5 || stats.count < 6) continue;
+      }
+      // Weekly, quarterly and yearly series of a generic merchant need a
+      // steady amount and date.
+      if (!knownRecurring && frequency !== "monthly") {
+        const maxDrift = frequency === "weekly" ? 1 : frequency === "quarterly" ? 7 : 10;
+        if (!steadyAmount || stats.meanDriftDays > maxDrift) continue;
+        if (frequency === "quarterly" && stats.count < 4) continue;
+      }
 
-      // Yearly with only 2 observations requires consistent amounts (<= 12% CV) to avoid coincidence false positives
-      if (frequency === "yearly" && fit.matched.length === 2 && cv > 0.12)
-        continue;
-      // Reject high-randomness spend
-      if (cv > 0.62) continue;
-
-      // Also check that the pattern hasn't gone stale (> 2.5 cycles since last payment)
-      const lastMatch = fit.matched[fit.matched.length - 1];
-      const nextStepDate = occurrenceAtStep(
-        fit.anchorStart,
-        frequency,
-        lastMatch.step + 1,
-      );
-      const secondNextStepDate = occurrenceAtStep(
-        fit.anchorStart,
-        frequency,
-        lastMatch.step + 2,
-      );
-      if (asOfDate > addDays(secondNextStepDate, 15)) continue;
-
-      const isExactFixed = minAmount === maxAmount;
+      const recentAmounts = amounts.slice(-6);
+      const isExactFixed = recentAmounts.every((a) => a === recentAmounts[0]);
+      const recentMean =
+        recentAmounts.reduce((s, v) => s + v, 0) / recentAmounts.length;
       const isNearFixed =
         !isExactFixed &&
-        mean > 0 &&
-        (maxAmount - minAmount) / mean <= 0.025 &&
-        amounts.filter((a) => a === amounts[amounts.length - 1]).length >=
-          amounts.length - 1;
+        recentMean > 0 &&
+        (Math.max(...recentAmounts) - Math.min(...recentAmounts)) / recentMean <= 0.025;
       const amountType: RecurringAmountType =
         isExactFixed || isNearFixed ? "fixed" : "variable";
-
-      // Recency-weighted integer fils estimate for variable bills, latest/mode for fixed
-      const recentSlice = amounts.slice(-6);
       let weightedSum = 0;
       let weightTotal = 0;
-      recentSlice.forEach((amt, idx) => {
-        const w = idx + 1;
-        weightedSum += amt * w;
-        weightTotal += w;
+      recentAmounts.forEach((amt, idx) => {
+        weightedSum += amt * (idx + 1);
+        weightTotal += idx + 1;
       });
       const estimatedAmount =
         amountType === "fixed"
           ? amounts[amounts.length - 1]
           : Math.round(weightedSum / weightTotal);
 
-      const { value: accountId, share: accountConsistency } = predominantValue(
-        matchedTxs.map((t) => t.account_id),
-      );
-      const nonNullCategories = matchedTxs
+      const nonNullCategories = memberTxs
         .map((t) => t.category_id)
         .filter((c): c is string => c !== null);
       const categoryId = nonNullCategories.length
@@ -1041,91 +1150,169 @@ export function detectRecurringPatterns(
         : null;
       const categoryName =
         ledger.categories.find((c) => c.id === categoryId)?.name ?? "";
+      const sampleText = descriptionText(memberTxs);
 
       const classification = classifier.classify({
-        merchant: cluster.merchant,
-        type: cluster.type,
+        merchant,
+        type,
         frequency,
-        observationCount: fit.matched.length,
-        missedCycles: fit.missedCycles,
-        offCycleCount: fit.offCycleCount,
-        meanResidualDays: fit.meanResidualDays,
-        maxResidualDays: fit.maxResidualDays,
-        amountMean: mean,
-        amountStdDev: std,
-        amountCv: cv,
-        isExactFixed: isExactFixed || isNearFixed,
+        observationCount: stats.count,
+        missedCycles: stats.missedCycles,
+        offCycleCount: competing,
+        meanResidualDays: stats.meanDriftDays,
+        maxResidualDays: stats.maxDriftDays,
+        amountMean: stats.amountMean,
+        amountStdDev: stats.amountStd,
+        amountCv: stats.amountCv,
+        isExactFixed: amountType === "fixed",
         accountConsistency,
         categoryName,
+        descriptionText: sampleText,
       });
-
       if (classification.confidence < minConfidence) continue;
 
-      // Start the draft schedule at the beginning of the contiguous recent matched run
-      // so accepting links those recent payments cleanly without creating old missed-cycle overdue flags.
-      let contiguousStartIdx = fit.matched.length - 1;
+      // Aliases: other merchant names this series was billed under.
+      const aliasNames: string[] = [];
+      for (const m of memberMerchants) {
+        if (
+          m.key !== merchant.key &&
+          merchantSimilarity(m, merchant) < 0.85 &&
+          !aliasNames.includes(m.displayName)
+        ) {
+          aliasNames.push(m.displayName);
+        }
+      }
+
+      // Skip if an existing schedule already covers this series.
+      const alreadyScheduled = existingSchedules.some(
+        (s) =>
+          s.type === type &&
+          s.frequency === frequency &&
+          (s.amount === 0 || amountInBand(s.amount, medianAmount)) &&
+          scheduleAliases(s).some(
+            (name) =>
+              merchantSimilarity(name, merchant) >= 0.78 ||
+              memberMerchants.some((m) => merchantSimilarity(name, m) >= 0.78),
+          ),
+      );
+      if (alreadyScheduled) continue;
+
+      const baseKey = buildPatternKey(type, merchant.key, frequency);
+      let patternKey = ended
+        ? `${baseKey}:ended:${stats.lastDate.slice(0, 7)}`
+        : baseKey;
+      if (usedKeys.has(patternKey)) {
+        patternKey = `${patternKey}:${seriesKeySuffix(medianAmount)}`;
+      }
+      if (usedKeys.has(patternKey) || dismissed.has(patternKey)) continue;
+
+      // The schedule covers the latest unbroken run of payments, so accepting
+      // it links them without flagging old skipped cycles as overdue.
+      let runStart = chain.members.length - 1;
       while (
-        contiguousStartIdx > 0 &&
-        fit.matched[contiguousStartIdx].step -
-          fit.matched[contiguousStartIdx - 1].step ===
-          1
+        runStart > 0 &&
+        chain.members[runStart].step - chain.members[runStart - 1].step === 1
       ) {
-        contiguousStartIdx--;
+        runStart--;
       }
-      const contiguousMatches = fit.matched.slice(contiguousStartIdx);
-      let scheduleStartDate = contiguousMatches[0].occurrenceDate;
-      // Preserve month-end day anchor (e.g. 31st) if the first contiguous month was a shorter month (e.g. Feb 28)
-      const anchorParsed = parseIsoDate(fit.anchorStart);
-      const startParsed = parseIsoDate(scheduleStartDate);
-      if (
-        anchorParsed &&
-        startParsed &&
-        anchorParsed.day > startParsed.day &&
-        contiguousMatches.length === 1
-      ) {
-        scheduleStartDate = nextStepDate;
+      let run = chain.members.slice(runStart);
+      const runDays = run.map((m) => parseIsoDate(m.item.date)?.day ?? 1);
+      let anchorDay = medianOf(runDays);
+      // Keep an established month-end billing day even when the latest run
+      // is short or starts in a short month.
+      const allDays = chain.members.map((m) => parseIsoDate(m.item.date)?.day ?? 1);
+      const fullAnchor = medianOf(allDays);
+      if (frequency !== "weekly" && fullAnchor >= 29 && fullAnchor > anchorDay) {
+        anchorDay = fullAnchor;
       }
-
-      const historicalLinks = contiguousMatches
-        .filter((m) => m.occurrenceDate >= scheduleStartDate)
-        .map((m) => ({
-          occurrence_date: m.occurrenceDate,
-          transaction_id: m.tx.id,
-        }));
-
+      let scheduleStartDate = run[0].item.date;
+      let runBaseStep = run[0].step;
+      if (frequency !== "weekly") {
+        const first = parseIsoDate(run[0].item.date)!;
+        const candidatesForStart = [-1, 0, 1].map((shift) => {
+          const total = first.year * 12 + (first.month - 1) + shift;
+          const y = Math.floor(total / 12);
+          const mo = (total % 12) + 1;
+          return formatIsoDate(y, mo, Math.min(anchorDay, daysInMonth(y, mo)));
+        });
+        scheduleStartDate = candidatesForStart.reduce((best, d) =>
+          Math.abs(daysBetween(d, run[0].item.date)) <
+          Math.abs(daysBetween(best, run[0].item.date))
+            ? d
+            : best,
+        );
+        // A start date clamped to a short month (Feb 28 for the 31st) would
+        // pull every later due date back, so start at the first cycle whose
+        // month holds the anchor day. Payments before it stay unlinked.
+        const parsedStart = parseIsoDate(scheduleStartDate)!;
+        if (parsedStart.day < anchorDay) {
+          const monthsPerStep =
+            frequency === "monthly" ? 1 : frequency === "quarterly" ? 3 : 12;
+          for (let k = 1; k <= 12; k++) {
+            const total =
+              parsedStart.year * 12 + (parsedStart.month - 1) + k * monthsPerStep;
+            const y = Math.floor(total / 12);
+            const mo = (total % 12) + 1;
+            if (daysInMonth(y, mo) < anchorDay) continue;
+            const remaining = run.filter((m) => m.step - run[0].step >= k);
+            if (!remaining.length && ended) break;
+            scheduleStartDate = formatIsoDate(y, mo, anchorDay);
+            runBaseStep = run[0].step + k;
+            run = remaining;
+            break;
+          }
+        }
+      }
+      const historicalLinks = run.map((m) => ({
+        occurrence_date: occurrenceAtStep(
+          scheduleStartDate,
+          frequency,
+          m.step - runBaseStep,
+        ),
+        transaction_id: m.item.id,
+      }));
+      const lastOccurrence = historicalLinks.length
+        ? historicalLinks[historicalLinks.length - 1].occurrence_date
+        : scheduleStartDate;
+      const lastStep = run.length ? run[run.length - 1].step - runBaseStep : -1;
+      const nextStepDate = occurrenceAtStep(scheduleStartDate, frequency, lastStep + 1);
       const nextExpectedDate =
-        nextStepDate >= asOfDate
+        ended || nextStepDate >= asOfDate
           ? nextStepDate
           : occurrenceAtStep(
-              fit.anchorStart,
+              scheduleStartDate,
               frequency,
-              firstStepOnOrAfter(fit.anchorStart, frequency, asOfDate),
+              firstStepOnOrAfter(scheduleStartDate, frequency, asOfDate),
             );
 
+      const noun = type === "income" ? "deposits" : "payments";
       const explanationParts = [
-        `${fit.matched.length} ${frequency} ${cluster.type === "income" ? "deposits" : "payments"}`,
-        amountType === "fixed"
-          ? "consistent amount"
-          : `variable range`,
+        `${stats.count} ${frequency} ${noun}`,
+        amountType === "fixed" ? "consistent amount" : "variable amount",
       ];
-      if (fit.meanResidualDays <= 1.5) {
-        explanationParts.push("steady billing date");
-      } else {
+      if (stats.meanDriftDays <= 1.5) explanationParts.push("steady billing date");
+      else explanationParts.push(`date varies by about ${Math.round(stats.meanDriftDays)}d`);
+      if (stats.missedCycles > 0) {
         explanationParts.push(
-          `±${Math.round(fit.meanResidualDays)}d date variance`,
+          `${stats.missedCycles} skipped cycle${stats.missedCycles > 1 ? "s" : ""}`,
         );
       }
-      if (fit.missedCycles > 0) {
-        explanationParts.push(
-          `${fit.missedCycles} skipped cycle${fit.missedCycles > 1 ? "s" : ""}`,
-        );
+      if (aliasNames.length) explanationParts.push(`also billed as ${aliasNames.join(", ")}`);
+      if (ended) explanationParts.push(`last paid ${stats.lastDate}`);
+
+      const notesParts = [`Detected from ${stats.count} historical transactions`];
+      if (aliasNames.length) {
+        notesParts.push(`also billed as ${aliasNames.map((n) => `"${n}"`).join(", ")}`);
       }
 
-      const candidate: DetectedPattern = {
+      usedKeys.add(patternKey);
+      for (const t of memberTxs) consumed.add(t.id);
+
+      results.push({
         patternKey,
-        merchantKey: cluster.merchant.key,
-        displayName: cluster.merchant.displayName,
-        type: cluster.type,
+        merchantKey: merchant.key,
+        displayName: merchant.displayName,
+        type,
         frequency,
         amountType,
         estimatedAmount,
@@ -1137,36 +1324,40 @@ export function detectRecurringPatterns(
         accountId,
         categoryId,
         nextExpectedDate,
+        status: ended ? "ended" : "active",
+        firstDate: stats.firstDate,
+        lastDate: stats.lastDate,
+        aliases: aliasNames,
         explanation: explanationParts.join(" · "),
-        supportingTransactions: matchedTxs
+        supportingTransactions: memberTxs
           .slice()
           .sort((a, b) => b.date.localeCompare(a.date)),
         draftSchedule: {
-          name: cluster.merchant.displayName,
-          type: cluster.type,
+          name: merchant.displayName,
+          type,
           amount: estimatedAmount,
           amount_type: amountType,
           account_id: accountId,
           category_id: categoryId,
           frequency,
           start_date: scheduleStartDate,
-          end_date: null,
+          end_date: ended ? lastOccurrence : null,
           status: "active",
-          notes: `Detected from ${fit.matched.length} historical transactions`,
+          notes: notesParts.join(" · "),
         },
         historicalLinks,
-      };
-
-      if (!bestCandidate || candidate.confidence > bestCandidate.confidence) {
-        bestCandidate = candidate;
-      }
+      });
     }
-
-    if (bestCandidate) results.push(bestCandidate);
   }
 
-  return results.sort(
+  // Ended series are filtered only here, after they have claimed their
+  // payments, so leaving them out never turns those payments into other
+  // (wrong) suggestions.
+  return results
+    .filter((p) => includeEnded || p.status === "active")
+    .sort(
     (a, b) =>
+      (a.status === b.status ? 0 : a.status === "active" ? -1 : 1) ||
       b.confidence - a.confidence ||
       b.supportingTransactions.length - a.supportingTransactions.length ||
       a.displayName.localeCompare(b.displayName),
@@ -1179,7 +1370,7 @@ const MATCH_WINDOW_BY_FREQ: Record<
 > = {
   daily: { earlyDays: 1, lateDays: 1 },
   weekly: { earlyDays: 3, lateDays: 3 },
-  monthly: { earlyDays: 7, lateDays: 14 },
+  monthly: { earlyDays: 12, lateDays: 16 },
   quarterly: { earlyDays: 10, lateDays: 20 },
   yearly: { earlyDays: 14, lateDays: 30 },
 };
@@ -1249,8 +1440,8 @@ export function reconcileTransactions(
       const linked = txById.get(occ.transaction_id);
       if (!linked) continue;
       histAmounts.push(linked.amount);
-      if (linked.payee.trim()) {
-        const norm = normalizeMerchant(linked.payee);
+      if (transactionLabel(linked)) {
+        const norm = normalizeMerchant(transactionLabel(linked));
         if (
           norm.key &&
           !schedMerchants.some((m) => m.key === norm.key)
@@ -1304,7 +1495,7 @@ export function reconcileTransactions(
         if (dayOffset < -window.earlyDays || dayOffset > window.lateDays)
           continue;
 
-        const txMerchant = normalizeMerchant(tx.payee);
+        const txMerchant = normalizeMerchant(transactionLabel(tx));
         let merchantScore = 0;
         for (const m of meta.merchants) {
           merchantScore = Math.max(
@@ -1837,6 +2028,8 @@ export function buildIntelligentForecast(
   let variableExpense = 0;
   let totalIncome = 0;
   for (const s of schedules) {
+    // Ended schedules are history, not an ongoing commitment.
+    if (s.end_date && s.end_date < asOfDate) continue;
     const profile = profiles[s.id];
     const mult = monthlyMultiplier(s.frequency);
     const monthlyAmt = Math.round(profile.expectedAmount * mult);
