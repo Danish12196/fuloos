@@ -4289,3 +4289,171 @@ button.small-avatar {
 button.small-avatar:hover {
   box-shadow: 0 0 0 3px var(--active-surface);
 }
+
+/* Recurring suggestion cards: layout that holds at any width */
+.detected-patterns-block,
+.review-candidates-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 23px 22px;
+}
+.detected-patterns-block + .detected-patterns-block {
+  margin-top: 12px;
+}
+:is(.detected-patterns-block, .review-candidates-block) .sub-block-heading {
+  display: block;
+  margin: 0;
+}
+:is(.detected-patterns-block, .review-candidates-block) .sub-block-heading .eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  background: none;
+  padding: 0;
+}
+:is(.detected-patterns-block, .review-candidates-block) .sub-block-heading .eyebrow.green {
+  color: var(--link);
+}
+:is(.detected-patterns-block, .review-candidates-block) .sub-block-heading h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 650;
+  color: var(--text);
+}
+:is(.detected-patterns-block, .review-candidates-block) .sub-block-heading p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 70ch;
+}
+.suggestion-cards-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  align-items: stretch;
+}
+.suggestion-card {
+  min-width: 0;
+  padding: 16px 18px;
+}
+.suggestion-card .card-top {
+  flex-wrap: wrap;
+}
+.suggestion-card .card-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--soft-surface);
+  color: var(--text-soft);
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.suggestion-card .card-kind-badge svg {
+  flex-shrink: 0;
+}
+.suggestion-card .confidence-pill {
+  white-space: nowrap;
+}
+.confidence-pill.high {
+  background: #e4f4e2;
+  color: #1f6436;
+}
+.confidence-pill.medium {
+  background: #fcf1db;
+  color: #926514;
+}
+.suggestion-card .card-main {
+  min-width: 0;
+  flex: 1;
+  gap: 10px;
+}
+.suggestion-card .card-heading-row {
+  align-items: flex-start;
+}
+.suggestion-card .card-heading-row > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+.suggestion-card .card-heading-row h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.suggestion-card .card-subtitle {
+  margin: 0;
+  line-height: 1.45;
+}
+.suggestion-card .card-subtitle + .card-subtitle {
+  margin-top: 2px;
+}
+.suggestion-card .card-amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  flex-shrink: 0;
+  max-width: 50%;
+}
+.suggestion-card .card-amount b {
+  white-space: nowrap;
+  font-size: 15px;
+}
+.suggestion-card .card-amount small {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.suggestion-card .pattern-explanation-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.suggestion-card .pattern-explanation-box svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.suggestion-card .supporting-disclosure {
+  align-items: flex-start;
+}
+.suggestion-card .supporting-list {
+  align-self: stretch;
+}
+.suggestion-card .supporting-payee {
+  flex: 1;
+  max-width: none;
+  margin: 0 8px;
+}
+.suggestion-card .card-actions {
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 4px;
+}
+.suggestion-card .card-actions .compact-btn {
+  margin-left: 0;
+}
+[data-theme="dark"] .confidence-pill.high {
+  background: #1f3a2b;
+  color: #9fd3b0;
+}
+[data-theme="dark"] .confidence-pill.medium {
+  background: #3a3020;
+  color: #e3c27a;
+}
+@media (max-width: 640px) {
+  .detected-patterns-block,
+  .review-candidates-block {
+    padding: 0 14px 18px;
+  }
+}

@@ -75,6 +75,18 @@ import {
   type MatchCandidate,
 } from "./recurringAutomation.ts";
 
+const categoryHintLabels: Record<string, string> = {
+  subscription: "Subscription",
+  utilities: "Utilities",
+  telecom: "Phone & internet",
+  rent: "Rent",
+  salary: "Salary",
+  insurance: "Insurance",
+  membership: "Membership",
+  loan: "Loan / instalment",
+  other_recurring: "Recurring",
+};
+
 export const frequencyLabels: Record<RecurringFrequency, string> = {
   daily: "Daily",
   weekly: "Weekly",
@@ -652,7 +664,7 @@ export function RecurringPage({
         <div className="card-top">
           <span className="card-kind-badge">
             <Sparkles size={14} />
-            {pattern.categoryHint}
+            {categoryHintLabels[pattern.categoryHint] ?? pattern.categoryHint}
           </span>
           <span
             className={`confidence-pill ${pattern.confidenceTier}`}
