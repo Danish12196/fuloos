@@ -10,6 +10,14 @@ import {
   type CsvOptions,
   type ImportTransaction,
 } from "./csv";
+import type { Transaction } from "./domain";
+import {
+  appliedMatches,
+  findTransferMatches,
+  pairedTransfer,
+  type TransferDecision,
+  type TransferMatch,
+} from "./transferMatch";
 import {
   buildPreset,
   presetKey,
@@ -72,6 +80,24 @@ function PresetNameRow({
   );
 }
 
+function transferSummary(applied: TransferMatch[]): string {
+  const count = (kind: TransferMatch["kind"]) =>
+    applied.filter((m) => m.kind === kind).length;
+  const plural = (n: number, one: string, many: string) =>
+    `${n} ${n === 1 ? one : many}`;
+  const parts = [
+    count("named") &&
+      `${plural(count("named"), "row is imported as a new transfer", "rows are imported as new transfers")}`,
+    count("pair") &&
+      `${plural(count("pair"), "row completes a transfer", "rows complete transfers")} with an entry already in another account (that entry becomes the transfer, no new row)`,
+    count("recorded") &&
+      `${plural(count("recorded"), "row is already recorded as a transfer and skipped", "rows are already recorded as transfers and skipped")} as duplicates`,
+  ].filter(Boolean);
+  return parts.length
+    ? `${parts.join("; ")}.`
+    : "No rows are treated as transfers yet.";
+}
+
 export function CsvImport({
   ledger,
   onClose,
@@ -91,6 +117,8 @@ export function CsvImport({
   onImport: (
     rows: ImportTransaction[],
     progress: (n: number) => void,
+    /** Existing transactions that become transfers because their other leg is in this file. */
+    paired: Transaction[],
   ) => Promise<void>;
 }) {
   const [filter, setFilter] = useState("all");
@@ -112,6 +140,9 @@ export function CsvImport({
     [total, setTotal] = useState(0),
     [excluded, setExcluded] = useState<Set<number>>(new Set()),
     [includeDuplicates, setIncludeDuplicates] = useState(false),
+    [decisions, setDecisions] = useState<Map<number, TransferDecision>>(
+      new Map(),
+    ),
     [reading, setReading] = useState(false);
   const [options, setOptions] = useState<CsvOptions>({
     date: -1,
@@ -174,20 +205,100 @@ export function CsvImport({
     };
   }, [presetStore]);
 
-  let rows: string[][] = [],
-    parseError = "";
-  try {
-    rows = text ? parseCsv(text, delimiter).slice(skip) : [];
-  } catch (e) {
-    parseError = (e as Error).message;
-  }
+  const { rows, parseError } = useMemo(() => {
+    try {
+      return {
+        rows: text ? parseCsv(text, delimiter).slice(skip) : [],
+        parseError: "",
+      };
+    } catch (e) {
+      return { rows: [] as string[][], parseError: (e as Error).message };
+    }
+  }, [text, delimiter, skip]);
   const firstRow = rows[0];
   const columns =
     firstRow?.map((v, i) =>
       header ? `${v || "Unnamed"} (${i + 1})` : `Column ${i + 1}`,
     ) ?? [];
-  const data = header ? rows.slice(1) : rows;
-  const preview = previewCsv(data, options, ledger);
+  const data = useMemo(() => (header ? rows.slice(1) : rows), [rows, header]);
+  // Rows the user set by hand in the table keep their choice; the rest are
+  // checked against the ledger for the other side of a transfer.
+  const { matches, matchRows } = useMemo(() => {
+    const manual = options.transfers ?? {};
+    const base = previewCsv(data, options, ledger).filter(
+      (r) => !(r.index in manual),
+    );
+    const matches = findTransferMatches(base, options.account, ledger);
+    const wanted = new Set(matches.map((m) => m.index));
+    return {
+      matches,
+      matchRows: new Map(
+        base.flatMap((r) =>
+          r.transaction && wanted.has(r.index)
+            ? [[r.index, r.transaction] as const]
+            : [],
+        ),
+      ),
+    };
+  }, [data, options, ledger]);
+  const applied = useMemo(
+    () => appliedMatches(matches, decisions),
+    [matches, decisions],
+  );
+  const appliedByIndex = new Map(applied.map((m) => [m.index, m]));
+  const matchByIndex = new Map(matches.map((m) => [m.index, m]));
+  const transfers = useMemo<Record<number, string>>(
+    () => ({
+      ...Object.fromEntries(applied.map((m) => [m.index, m.otherAccount])),
+      ...(options.transfers ?? {}),
+    }),
+    [applied, options.transfers],
+  );
+  const preview = useMemo(() => {
+    const recorded = new Set(
+      applied.filter((m) => m.kind === "recorded").map((m) => m.index),
+    );
+    return previewCsv(data, { ...options, transfers }, ledger).map((r) =>
+      recorded.has(r.index) ? { ...r, duplicate: true } : r,
+    );
+  }, [data, options, transfers, applied, ledger]);
+  const pendingMatches = matches.filter(
+    (m) => m.confidence === "likely" && !decisions.has(m.index),
+  );
+  function decide(indexes: number[], decision: TransferDecision) {
+    setDecisions((prev) => {
+      const next = new Map(prev);
+      for (const i of indexes) next.set(i, decision);
+      return next;
+    });
+    setDone(false);
+  }
+  function resetRowChoices() {
+    setExcluded(new Set());
+    setDecisions(new Map());
+  }
+  const accountName = (id: string) =>
+    ledger.accounts.find((a) => a.id === id)?.name ?? "another account";
+  /** "to Liv Bank" for money leaving the import account, "from …" otherwise. */
+  function direction(m: TransferMatch) {
+    const out =
+      m.counterpart?.type === "income" ||
+      (m.counterpart?.type === "transfer" &&
+        m.counterpart.account_id === options.account) ||
+      (!m.counterpart && rowOut(m.index));
+    return `${out ? "to" : "from"} ${accountName(m.otherAccount)}`;
+  }
+  function rowOut(index: number) {
+    const t = matchRows.get(index);
+    return t ? t.type === "expense" : false;
+  }
+  function matchLabel(m: TransferMatch) {
+    if (m.kind === "recorded")
+      return `Already recorded as a transfer ${direction(m)}`;
+    if (m.kind === "pair")
+      return `Transfer ${direction(m)} · completes the ${accountName(m.otherAccount)} entry of ${m.counterpart?.date}`;
+    return `Transfer ${direction(m)}`;
+  }
 
   const activePreset = activePresetName
     ? (presets.find((p) => presetKey(p.name) === presetKey(activePresetName)) ??
@@ -226,7 +337,7 @@ export function CsvImport({
       account: o.account,
       transfers: {},
     }));
-    setExcluded(new Set());
+    resetRowChoices();
     setDone(false);
     setMissingNotice(
       csvText && resolved.missing.length
@@ -345,7 +456,7 @@ export function CsvImport({
     const key = name.toLowerCase();
     if (
       name &&
-      !options.transfers?.[index] &&
+      !transfers[index] &&
       !existingNames.has(key) &&
       !missingByName.has(key)
     ) {
@@ -405,11 +516,13 @@ export function CsvImport({
       filter === "all" ||
       (filter === "invalid"
         ? !!r.error
-        : filter === "duplicates"
-          ? r.duplicate
-          : !!r.transaction &&
-            !excluded.has(r.index) &&
-            (!r.duplicate || includeDuplicates)),
+        : filter === "transfers"
+          ? matchByIndex.has(r.index)
+          : filter === "duplicates"
+            ? r.duplicate
+            : !!r.transaction &&
+              !excluded.has(r.index) &&
+              (!r.duplicate || includeDuplicates)),
   );
   const selected = preview.filter(
     (r) =>
@@ -423,7 +536,8 @@ export function CsvImport({
       [key]: value,
       ...(key === "account" ? { transfers: {} } : {}),
     }));
-    setExcluded(new Set());
+    if (key === "transfers") setExcluded(new Set());
+    else resetRowChoices();
     setDone(false);
   }
   function mapping(
@@ -480,7 +594,7 @@ export function CsvImport({
       } else {
         setOptions((o) => ({ ...o, transfers: {} }));
         setMissingNotice(null);
-        setExcluded(new Set());
+        resetRowChoices();
         setDone(false);
       }
     } catch (e) {
@@ -490,20 +604,30 @@ export function CsvImport({
     }
   }
   async function submit() {
+    const creates = selected.filter(
+      (r) => appliedByIndex.get(r.index)?.kind !== "pair",
+    );
+    const paired = selected.flatMap((r) => {
+      const m = appliedByIndex.get(r.index);
+      return m?.kind === "pair" && m.counterpart
+        ? [pairedTransfer(m.counterpart, options.account)]
+        : [];
+    });
     setBusy(true);
-    setTotal(selected.length);
+    setTotal(creates.length);
     setProgress(0);
     setError("");
     try {
       await onImport(
-        selected.map((r) => r.transaction!),
+        creates.map((r) => r.transaction!),
         (n) => {
           setProgress(n);
           setExcluded(
             (prev) =>
-              new Set([...prev, ...selected.slice(0, n).map((r) => r.index)]),
+              new Set([...prev, ...creates.slice(0, n).map((r) => r.index)]),
           );
         },
+        paired,
       );
       // Saving continues in the background queue.
       onClose();
@@ -734,7 +858,7 @@ export function CsvImport({
                 onChange={(e) => {
                   setDelimiter(e.target.value);
                   setOptions((o) => ({ ...o, transfers: {} }));
-                  setExcluded(new Set());
+                  resetRowChoices();
                 }}
               >
                 <option value=",">Comma</option>
@@ -753,7 +877,7 @@ export function CsvImport({
                 onChange={(e) => {
                   setSkip(Math.max(0, Number(e.target.value)));
                   setOptions((o) => ({ ...o, transfers: {} }));
-                  setExcluded(new Set());
+                  resetRowChoices();
                 }}
               />
             </label>
@@ -791,7 +915,7 @@ export function CsvImport({
               onChange={(e) => {
                 setHeader(e.target.checked);
                 setOptions((o) => ({ ...o, transfers: {} }));
-                setExcluded(new Set());
+                resetRowChoices();
               }}
             />
             First row contains column names
@@ -930,6 +1054,96 @@ export function CsvImport({
             {parseError || error}
           </p>
         )}
+        {matches.length > 0 && !parseError && !done && (
+          <section className="transfer-matches" aria-labelledby="tm-title">
+            <h3 id="tm-title">Transfers between your accounts</h3>
+            <p className="muted">
+              {transferSummary(applied)} Change any row with its type menu in
+              the table.
+            </p>
+            {pendingMatches.length > 0 && (
+              <>
+                <p>
+                  {pendingMatches.length === 1
+                    ? "One more row looks like a transfer."
+                    : `${pendingMatches.length} more rows look like transfers.`}{" "}
+                  Confirm the ones that are:
+                </p>
+                <ul className="transfer-match-list">
+                  {pendingMatches.map((m) => {
+                    const t = matchRows.get(m.index);
+                    return (
+                      <li key={m.index}>
+                        <div>
+                          <b>
+                            {t?.date} ·{" "}
+                            {t
+                              ? money(
+                                  t.amount * (t.type === "expense" ? -1 : 1),
+                                )
+                              : ""}{" "}
+                            · {t?.payee || "No payee"}
+                          </b>
+                          <span className="muted small">
+                            {matchLabel(m)} ({m.reasons.join(", ")})
+                          </span>
+                        </div>
+                        <div className="csv-category-actions">
+                          <button
+                            type="button"
+                            className="primary"
+                            disabled={busy}
+                            onClick={() => decide([m.index], "accept")}
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() => decide([m.index], "reject")}
+                          >
+                            Not a transfer
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {pendingMatches.length > 1 && (
+                  <div className="csv-category-actions">
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy}
+                      onClick={() =>
+                        decide(
+                          pendingMatches.map((m) => m.index),
+                          "accept",
+                        )
+                      }
+                    >
+                      Confirm all {pendingMatches.length}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        decide(
+                          pendingMatches.map((m) => m.index),
+                          "reject",
+                        )
+                      }
+                    >
+                      None are transfers
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
         {!!preview.length && !parseError && (
           <>
             <h3>Review transactions</h3>
@@ -962,6 +1176,11 @@ export function CsvImport({
                   {preview.filter((r) => r.duplicate).length})
                 </option>
                 <option value="selected">Selected ({selected.length})</option>
+                {matches.length > 0 && (
+                  <option value="transfers">
+                    Transfers found ({matches.length})
+                  </option>
+                )}
               </select>
             </label>
             <div className="csv-table">
@@ -1028,7 +1247,7 @@ export function CsvImport({
                         <select
                           aria-label={`Transfer account for row ${r.index + skip + (header ? 2 : 1)}`}
                           disabled={busy || done}
-                          value={options.transfers?.[r.index] ?? ""}
+                          value={transfers[r.index] ?? ""}
                           onChange={(e) =>
                             change("transfers", {
                               ...options.transfers,
@@ -1063,7 +1282,39 @@ export function CsvImport({
                       </td>
                       <td>
                         {r.error ||
-                          (r.duplicate ? "Possible duplicate" : "Ready")}
+                          (appliedByIndex.has(r.index) ? (
+                            <>
+                              {matchLabel(appliedByIndex.get(r.index)!)}{" "}
+                              <button
+                                type="button"
+                                className="text-button"
+                                disabled={busy || done}
+                                onClick={() => decide([r.index], "reject")}
+                              >
+                                Not a transfer
+                              </button>
+                            </>
+                          ) : matchByIndex.has(r.index) ? (
+                            <>
+                              Possible{" "}
+                              {matchLabel(matchByIndex.get(r.index)!).replace(
+                                /^Transfer|^Already/,
+                                (w) => w.toLowerCase(),
+                              )}{" "}
+                              <button
+                                type="button"
+                                className="text-button"
+                                disabled={busy || done}
+                                onClick={() => decide([r.index], "accept")}
+                              >
+                                Confirm
+                              </button>
+                            </>
+                          ) : r.duplicate ? (
+                            "Possible duplicate"
+                          ) : (
+                            "Ready"
+                          ))}
                       </td>
                     </tr>
                   ))}

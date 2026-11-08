@@ -990,13 +990,18 @@ function App() {
     source = "Import",
     /** Called with how many rows (in order) are confirmed saved; may run after the caller has closed. */
     onSaved?: (n: number) => void,
+    /** Existing transactions to turn into transfers, because the import holds their other leg. */
+    paired: Transaction[] = [],
   ) {
     rows.forEach((row) => validateTransaction(row, ledger));
+    paired.forEach((t) => validateTransaction(t, ledger));
+    const count = rows.length + paired.length;
     if (demo) {
+      const byId = new Map(paired.map((t) => [t.id, t]));
       setLedger((l) => ({
         ...l,
         transactions: [
-          ...l.transactions,
+          ...l.transactions.map((t) => byId.get(t.id) ?? t),
           ...rows.map((row) => ({ ...row, id: demoId() })),
         ],
       }));
@@ -1008,8 +1013,8 @@ function App() {
     const api = backend;
     const stillOwner = ownerGuard();
     queue.enqueue({
-      label: `${source} ${rows.length} ${rows.length === 1 ? "transaction" : "transactions"}`,
-      total: rows.length,
+      label: `${source} ${count} ${count === 1 ? "transaction" : "transactions"}`,
+      total: count,
       run: async (ctx) => {
         checkOwner(stillOwner);
         try {
@@ -1024,6 +1029,40 @@ function App() {
             },
             stillOwner,
           );
+          // Only convert entries that are still the plain expense or income
+          // that was matched; anything edited since is left alone.
+          const fresh = paired.flatMap((p) => {
+            const latest = latestTransaction(p.id);
+            if (
+              !latest ||
+              latest.type === "transfer" ||
+              latest.amount !== p.amount ||
+              latest.account_id !==
+                (latest.type === "expense" ? p.account_id : p.to_account_id)
+            )
+              return [];
+            return [
+              {
+                ...latest,
+                type: "transfer" as const,
+                category_id: null,
+                account_id: p.account_id,
+                to_account_id: p.to_account_id,
+              },
+            ];
+          });
+          fresh.forEach((t) => validateTransaction(t, ledgerRef.current));
+          if (fresh.length)
+            await api.updateTransactions(
+              fresh,
+              (saved, records) => {
+                if (!stillOwner()) return;
+                updateTransactions(records);
+                ctx.progress(rows.length + saved);
+              },
+              stillOwner,
+            );
+          ctx.progress(count);
         } catch (e) {
           if (stillOwner()) await load();
           throw e;
@@ -2418,8 +2457,8 @@ function App() {
         <CsvImport
           ledger={ledger}
           onClose={() => setImportOpen(false)}
-          onImport={(rows, progress) =>
-            importTransactions(rows, progress, "CSV import:")
+          onImport={(rows, progress, paired) =>
+            importTransactions(rows, progress, "CSV import:", undefined, paired)
           }
           onCreateCategories={createCategories}
           presetStore={presetStore}

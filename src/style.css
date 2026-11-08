@@ -2103,6 +2103,39 @@ button {
 .missing-categories > div {
   margin: 12px 0;
 }
+.transfer-matches {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 18px 0;
+}
+.transfer-matches h3 {
+  margin-top: 0;
+}
+.transfer-match-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  max-height: 320px;
+  overflow: auto;
+}
+.transfer-match-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.transfer-match-list li > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.transfer-match-list .csv-category-actions {
+  margin: 0;
+}
 .csv-table thead {
   position: sticky;
   top: 0;
