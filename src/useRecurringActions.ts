@@ -16,11 +16,9 @@ import {
   validateOccurrenceConfirmation,
   validateRecurringSchedule,
 } from "./recurring";
-import {
-  buildMatchDismissKey,
-  reconcileTransactions,
-  type DetectedPattern,
-} from "./recurringAutomation";
+import { buildMatchDismissKey } from "./recurringMerchant";
+import type { DetectedPattern } from "./recurringDetection";
+import { reconcileTransactions } from "./recurringReconcile";
 import type { RecurringTab } from "./RecurringView";
 
 export function useRecurringActions({

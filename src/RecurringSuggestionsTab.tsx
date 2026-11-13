@@ -10,12 +10,12 @@ import {
   Sparkles,
 } from "lucide-react";
 import { money, type Ledger } from "./domain.ts";
-import {
-  transactionLabel,
-  type DetectedPattern,
-  type MatchCandidate,
-  type ReconciliationResult,
-} from "./recurringAutomation.ts";
+import { transactionLabel } from "./recurringMerchant.ts";
+import type { DetectedPattern } from "./recurringDetection.ts";
+import type {
+  MatchCandidate,
+  ReconciliationResult,
+} from "./recurringReconcile.ts";
 import {
   categoryHintLabels,
   formatFullDate,

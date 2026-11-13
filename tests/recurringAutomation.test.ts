@@ -4,13 +4,17 @@ import {
   normalizeMerchant,
   merchantSimilarity,
   inferCategoryHint,
-  detectRecurringPatterns,
+  buildMatchDismissKey,
+} from "../src/recurringMerchant.ts";
+import { detectRecurringPatterns } from "../src/recurringDetection.ts";
+import {
   reconcileTransactions,
+  AUTO_LINK_THRESHOLD,
+} from "../src/recurringReconcile.ts";
+import {
   analyzeScheduleHistory,
   buildIntelligentForecast,
-  buildMatchDismissKey,
-  AUTO_LINK_THRESHOLD,
-} from "../src/recurringAutomation.ts";
+} from "../src/recurringForecast.ts";
 import {
   type Ledger,
   type RecurringSchedule,

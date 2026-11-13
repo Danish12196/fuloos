@@ -101,7 +101,7 @@ export function nameScore(text: string, account: Account): number {
   return account.type === "credit_card" && CARD_WORDS.test(text) ? 1 : 0;
 }
 
-export function hasTransferWords(text: string): boolean {
+function hasTransferWords(text: string): boolean {
   return TRANSFER_WORDS.test(text);
 }
 

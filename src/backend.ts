@@ -537,10 +537,16 @@ export class PocketBaseBackend {
     }
     return record;
   }
-  async updateTransactions(
-    values: Transaction[],
-    progress: (saved: number, records: Transaction[]) => void,
-    shouldContinue: () => boolean = () => true,
+  private async batchRecords<T, K extends Table>(
+    table: K,
+    values: T[],
+    buildRequest: (
+      item: T,
+      userId: string,
+    ) => { method: string; url: string; body: Record<string, unknown> },
+    isValidBody: (body: RecordTypes[K] | undefined, item: T) => boolean,
+    progress: (saved: number, records: RecordTypes[K][]) => void,
+    shouldContinue: () => boolean,
   ): Promise<void> {
     const session = this.session;
     if (!session) throw new Error("Please sign in.");
@@ -549,25 +555,11 @@ export class PocketBaseBackend {
         throw new Error("Session changed. Reload the ledger before retrying.");
       const chunk = values.slice(offset, offset + IMPORT_BATCH_SIZE);
       const result = await this.request<
-        { status: number; body: Transaction }[]
+        { status: number; body: RecordTypes[K] }[]
       >("/api/batch", {
         method: "POST",
         body: JSON.stringify({
-          requests: chunk.map((t) => ({
-            method: "PATCH",
-            url: `/api/collections/fuloos_transactions/records/${encodeURIComponent(t.id)}`,
-            body: {
-              type: t.type,
-              amount: t.amount,
-              account_id: t.account_id,
-              to_account_id: t.to_account_id || "",
-              category_id: t.category_id || "",
-              date: t.date,
-              payee: t.payee,
-              notes: t.notes,
-              user_id: session.user.id,
-            },
-          })),
+          requests: chunk.map((item) => buildRequest(item, session.user.id)),
         }),
       });
       if (
@@ -575,52 +567,8 @@ export class PocketBaseBackend {
         result.length !== chunk.length ||
         result.some(
           (r, i) =>
-            r.status < 200 || r.status >= 300 || r.body?.id !== chunk[i].id,
+            r.status < 200 || r.status >= 300 || !isValidBody(r.body, chunk[i]),
         )
-      )
-        throw new Error(
-          "The server returned an unexpected batch result. Reload the ledger before retrying.",
-        );
-      if (this.session?.user.id !== session.user.id || !shouldContinue())
-        throw new Error("Session changed. Reload the ledger before retrying.");
-      progress(
-        offset + chunk.length,
-        result.map((r) => this.normalize("transactions", r.body)),
-      );
-    }
-  }
-  async createMany<K extends Table>(
-    table: K,
-    values: Omit<RecordTypes[K], "id">[],
-    progress: (saved: number, records: RecordTypes[K][]) => void,
-    shouldContinue: () => boolean = () => true,
-  ): Promise<void> {
-    const session = this.session;
-    if (!session) throw new Error("Please sign in.");
-    for (let offset = 0; offset < values.length; offset += IMPORT_BATCH_SIZE) {
-      if (this.session?.user.id !== session.user.id || !shouldContinue())
-        throw new Error("Session changed. Please sign in again.");
-      const chunk = values.slice(offset, offset + IMPORT_BATCH_SIZE);
-      const result = await this.request<
-        { status: number; body: RecordTypes[K] }[]
-      >("/api/batch", {
-        method: "POST",
-        body: JSON.stringify({
-          requests: chunk.map((value) => ({
-            method: "POST",
-            url: `/api/collections/fuloos_${table}/records`,
-            body: this.prepareBody(
-              table,
-              value as Record<string, unknown>,
-              session.user.id,
-            ),
-          })),
-        }),
-      });
-      if (
-        !Array.isArray(result) ||
-        result.length !== chunk.length ||
-        result.some((r) => r.status < 200 || r.status >= 300 || !r.body?.id)
       )
         throw new Error(
           "The server returned an unexpected batch result. Reload the ledger before retrying.",
@@ -632,6 +580,53 @@ export class PocketBaseBackend {
         result.map((r) => this.normalize(table, r.body)),
       );
     }
+  }
+  async updateTransactions(
+    values: Transaction[],
+    progress: (saved: number, records: Transaction[]) => void,
+    shouldContinue: () => boolean = () => true,
+  ): Promise<void> {
+    return this.batchRecords(
+      "transactions",
+      values,
+      (t, userId) => ({
+        method: "PATCH",
+        url: `/api/collections/fuloos_transactions/records/${encodeURIComponent(t.id)}`,
+        body: {
+          type: t.type,
+          amount: t.amount,
+          account_id: t.account_id,
+          to_account_id: t.to_account_id || "",
+          category_id: t.category_id || "",
+          date: t.date,
+          payee: t.payee,
+          notes: t.notes,
+          user_id: userId,
+        },
+      }),
+      (body, t) => body?.id === t.id,
+      progress,
+      shouldContinue,
+    );
+  }
+  async createMany<K extends Table>(
+    table: K,
+    values: Omit<RecordTypes[K], "id">[],
+    progress: (saved: number, records: RecordTypes[K][]) => void,
+    shouldContinue: () => boolean = () => true,
+  ): Promise<void> {
+    return this.batchRecords(
+      table,
+      values,
+      (value, userId) => ({
+        method: "POST",
+        url: `/api/collections/fuloos_${table}/records`,
+        body: this.prepareBody(table, value as Record<string, unknown>, userId),
+      }),
+      (body) => !!body?.id,
+      progress,
+      shouldContinue,
+    );
   }
   private async recordIds(collection: string): Promise<string[]> {
     const ids: string[] = [];

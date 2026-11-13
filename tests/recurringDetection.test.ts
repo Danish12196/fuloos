@@ -1,11 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  buildIntelligentForecast,
-  detectRecurringPatterns,
-  reconcileTransactions,
-  transactionLabel,
-} from "../src/recurringAutomation.ts";
+import { transactionLabel } from "../src/recurringMerchant.ts";
+import { detectRecurringPatterns } from "../src/recurringDetection.ts";
+import { reconcileTransactions } from "../src/recurringReconcile.ts";
+import { buildIntelligentForecast } from "../src/recurringForecast.ts";
 import {
   buildChains,
   cyclesForGap,

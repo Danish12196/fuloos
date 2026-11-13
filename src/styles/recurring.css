@@ -1,7 +1,4 @@
 /* Recurring transactions, calendar view, and confirmation modal */
-.modal {
-  background: var(--surface);
-}
 .recurring-overview {
   margin-top: 22px;
   grid-template-columns: 1fr 1.15fr;

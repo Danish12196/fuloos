@@ -119,7 +119,6 @@ export function AppModals({
   setSmsOpen: (v: boolean) => void;
   importTransactions: (
     rows: ImportTransaction[],
-    progress: (n: number) => void,
     source?: string,
     onSaved?: (n: number) => void,
     paired?: Transaction[],
@@ -243,8 +242,8 @@ export function AppModals({
         <CsvImport
           ledger={ledger}
           onClose={() => setImportOpen(false)}
-          onImport={(rows, progress, paired) =>
-            importTransactions(rows, progress, "CSV import:", undefined, paired)
+          onImport={(rows, paired) =>
+            importTransactions(rows, "CSV import:", undefined, paired)
           }
           onCreateCategories={createCategories}
           presetStore={presetStore}
@@ -259,8 +258,8 @@ export function AppModals({
           owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
           learning={learningStore}
           onClose={() => setSmsOpen(false)}
-          onImport={(rows, progress, onSaved) =>
-            importTransactions(rows, progress, "SMS import:", onSaved)
+          onImport={(rows, onSaved) =>
+            importTransactions(rows, "SMS import:", onSaved)
           }
         />
       )}

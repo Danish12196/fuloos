@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ImportProgress } from "./ImportProgress";
 import { money, uaeToday, type Ledger } from "./domain";
 import type { ImportTransaction } from "./csv";
 import { CANONICAL, CANONICAL_LABEL } from "./ledger/categoriser";
@@ -20,6 +19,7 @@ import {
   splitPastedSms,
   type RawSms,
 } from "./ledger/sms";
+import { ImportModalShell } from "./ImportModalShell";
 
 type Edit = Partial<Pick<ImportTransaction, "date" | "payee" | "category_id">>;
 
@@ -38,7 +38,6 @@ export function SmsImport({
   onClose: () => void;
   onImport: (
     rows: ImportTransaction[],
-    progress: (n: number) => void,
     /** Called with how many of the rows (in order) are confirmed saved, possibly after the dialog closed. */
     onSaved: (n: number) => void,
   ) => Promise<void>;
@@ -61,9 +60,6 @@ export function SmsImport({
   const [includeDuplicates, setIncludeDuplicates] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
   const [settings, setSettings] = useState<LearningSettings | null>(null);
   const [examples, setExamples] = useState<LearningExample[]>([]);
@@ -262,7 +258,6 @@ export function SmsImport({
   function resetInputs() {
     setEdits({});
     setExcluded(new Set());
-    setDone(false);
     setError("");
   }
   async function readFile(file?: File) {
@@ -292,8 +287,6 @@ export function SmsImport({
   }
   async function submit() {
     setBusy(true);
-    setTotal(selected.length);
-    setProgress(0);
     setError("");
     // Log corrections only for rows confirmed saved, in order, so a failed or retried import is never counted twice.
     const batch = selected;
@@ -312,13 +305,6 @@ export function SmsImport({
     try {
       await onImport(
         selected.map((r) => r.transaction!),
-        (n) => {
-          setProgress(n);
-          setExcluded(
-            (prev) =>
-              new Set([...prev, ...selected.slice(0, n).map((r) => r.index)]),
-          );
-        },
         onSaved,
       );
       // Saving continues in the background queue.
@@ -342,37 +328,37 @@ export function SmsImport({
           : "Using brand and keyword rules for suggestions. The learning model is not configured on this server.";
 
   return (
-    <dialog
-      ref={dialog}
+    <ImportModalShell
+      dialogRef={dialog}
       className="modal csv-modal sms-modal"
-      aria-labelledby="sms-title"
-      onCancel={(e) => {
-        e.preventDefault();
-        if (!busy) onClose();
-      }}
+      titleId="sms-title"
+      eyebrow="FROM YOUR BANK ALERTS"
+      title="Import bank SMS"
+      closeLabel="Close SMS import"
+      busy={busy}
+      onClose={onClose}
+      actions={
+        <>
+          <button className="secondary" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="primary"
+            disabled={busy || !selected.length || !account}
+            onClick={() => void submit()}
+          >
+            {busy ? "Importing…" : `Import ${selected.length} transactions`}
+          </button>
+        </>
+      }
     >
-      <div className="modal-head">
-        <div>
-          <span className="eyebrow">FROM YOUR BANK ALERTS</span>
-          <h2 id="sms-title">Import bank SMS</h2>
-        </div>
-        <button
-          className="icon-button"
-          disabled={busy}
-          onClick={onClose}
-          aria-label="Close SMS import"
-        >
-          ×
-        </button>
-      </div>
-      <div className="csv-body">
         <p className="muted">
           Paste bank SMS alerts (separate messages with a blank line) or upload
           an SMS Backup &amp; Restore XML file. Messages are read on this device
           and never uploaded. Only the transactions you confirm are saved, not
           the SMS text.
         </p>
-        <fieldset disabled={busy || done}>
+        <fieldset disabled={busy}>
           <div className="csv-grid">
             <label>
               Account
@@ -568,7 +554,7 @@ export function SmsImport({
               <input
                 type="checkbox"
                 checked={includeDuplicates}
-                disabled={busy || done}
+                disabled={busy}
                 onChange={(e) => setIncludeDuplicates(e.target.checked)}
               />
               Include possible duplicates
@@ -620,7 +606,6 @@ export function SmsImport({
                             aria-label={`Include message ${r.index + 1}`}
                             disabled={
                               busy ||
-                              done ||
                               !t ||
                               (r.duplicate && !includeDuplicates)
                             }
@@ -645,7 +630,7 @@ export function SmsImport({
                               type="date"
                               aria-label={`Date for message ${r.index + 1}`}
                               value={t.date}
-                              disabled={busy || done}
+                              disabled={busy}
                               onChange={(e) =>
                                 e.target.value &&
                                 edit(r.index, { date: e.target.value })
@@ -666,7 +651,7 @@ export function SmsImport({
                               aria-label={`Payee for message ${r.index + 1}`}
                               value={t.payee}
                               maxLength={120}
-                              disabled={busy || done}
+                              disabled={busy}
                               onChange={(e) =>
                                 edit(r.index, { payee: e.target.value })
                               }
@@ -689,7 +674,7 @@ export function SmsImport({
                               <select
                                 aria-label={`Category for message ${r.index + 1}`}
                                 value={t.category_id ?? ""}
-                                disabled={busy || done}
+                                disabled={busy}
                                 onChange={(e) =>
                                   edit(r.index, {
                                     category_id: e.target.value || null,
@@ -731,31 +716,6 @@ export function SmsImport({
             </div>
           </>
         )}
-        {done && (
-          <p role="status">Imported {progress} transactions successfully.</p>
-        )}
-      </div>
-      <div className="modal-actions">
-        {total > 0 && (
-          <ImportProgress
-            label="Transactions imported"
-            value={progress}
-            total={total}
-          />
-        )}
-        <button className="secondary" disabled={busy} onClick={onClose}>
-          {done ? "Done" : "Cancel"}
-        </button>
-        {!done && (
-          <button
-            className="primary"
-            disabled={busy || !selected.length || !account}
-            onClick={() => void submit()}
-          >
-            {busy ? "Importing…" : `Import ${selected.length} transactions`}
-          </button>
-        )}
-      </div>
-    </dialog>
+    </ImportModalShell>
   );
 }

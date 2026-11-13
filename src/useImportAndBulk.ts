@@ -95,7 +95,6 @@ export function useImportAndBulk({
 
   async function importTransactions(
     rows: ImportTransaction[],
-    progress: (n: number) => void,
     source = "Import",
     onSaved?: (n: number) => void,
     paired: Transaction[] = [],
@@ -112,7 +111,6 @@ export function useImportAndBulk({
           ...rows.map((row) => ({ ...row, id: demoId() })),
         ],
       }));
-      progress(rows.length);
       onSaved?.(rows.length);
       return;
     }

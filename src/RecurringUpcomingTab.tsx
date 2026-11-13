@@ -19,7 +19,7 @@ import {
   parseIsoDate,
   type OccurrenceItem,
 } from "./recurring.ts";
-import type { ForecastItem, IntelligentForecast } from "./recurringAutomation.ts";
+import type { ForecastItem, IntelligentForecast } from "./recurringForecast.ts";
 import {
   formatFullDate,
   formatShortDate,

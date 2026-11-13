@@ -1,8 +1,6 @@
 import type { Budget, Category, Ledger, Transaction } from "./domain.ts";
 
 export const MAX_BUDGET_AMOUNT = 100_000_000_000;
-/** Share of a budget spent before a category is flagged as close to its limit. */
-export const NEAR_LIMIT_RATIO = 0.8;
 
 export type BudgetStatus = "under" | "near" | "over";
 

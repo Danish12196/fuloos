@@ -28,13 +28,17 @@ import {
   type SchedulePaymentStatus,
 } from "./recurring.ts";
 import {
-  buildIntelligentForecast,
   detectRecurringPatterns,
-  reconcileTransactions,
   type DetectedPattern,
+} from "./recurringDetection.ts";
+import {
+  buildIntelligentForecast,
   type IntelligentForecast,
+} from "./recurringForecast.ts";
+import {
+  reconcileTransactions,
   type MatchCandidate,
-} from "./recurringAutomation.ts";
+} from "./recurringReconcile.ts";
 import { RecurringSchedulesTab } from "./RecurringSchedulesTab";
 import { RecurringSuggestionsTab } from "./RecurringSuggestionsTab";
 import { RecurringUpcomingTab } from "./RecurringUpcomingTab";
@@ -91,7 +95,7 @@ export function formatFullDate(date: string) {
   });
 }
 
-export function formatMonthYear(month: string) {
+function formatMonthYear(month: string) {
   return new Date(`${month}-15T12:00:00Z`).toLocaleDateString("en-GB", {
     month: "long",
     year: "numeric",

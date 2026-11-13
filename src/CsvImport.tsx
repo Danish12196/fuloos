@@ -30,6 +30,7 @@ import {
 import { CsvPresetBar } from "./CsvPresetBar";
 import { CsvReviewSection } from "./CsvReviewSection";
 import { CsvMissingCategories } from "./CsvMissingCategories";
+import { ImportModalShell } from "./ImportModalShell";
 
 export function CsvImport({
   ledger,
@@ -49,7 +50,6 @@ export function CsvImport({
   onClose: () => void;
   onImport: (
     rows: ImportTransaction[],
-    progress: (n: number) => void,
     /** Existing transactions that become transfers because their other leg is in this file. */
     paired: Transaction[],
   ) => Promise<void>;
@@ -68,9 +68,6 @@ export function CsvImport({
     [skip, setSkip] = useState(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [progress, setProgress] = useState(0),
-    [done, setDone] = useState(false),
-    [total, setTotal] = useState(0),
     [excluded, setExcluded] = useState<Set<number>>(new Set()),
     [includeDuplicates, setIncludeDuplicates] = useState(false),
     [decisions, setDecisions] = useState<Map<number, TransferDecision>>(
@@ -250,7 +247,6 @@ export function CsvImport({
       for (const i of indexes) next.set(i, decision);
       return next;
     });
-    setDone(false);
   }
   function resetRowChoices() {
     setExcluded(new Set());
@@ -317,7 +313,6 @@ export function CsvImport({
       transfers: {},
     }));
     resetRowChoices();
-    setDone(false);
     setMissingNotice(
       csvText && resolved.missing.length
         ? { presetName: preset.name, missing: resolved.missing }
@@ -519,7 +514,6 @@ export function CsvImport({
     }));
     if (key === "transfers") setExcluded(new Set());
     else resetRowChoices();
-    setDone(false);
   }
   function mapping(
     key:
@@ -564,8 +558,6 @@ export function CsvImport({
       setFilename(file.name);
       setCategoryProgress("");
       setCategoryCounts({ saved: 0, total: 0 });
-      setProgress(0);
-      setTotal(0);
       setCreating(null);
       if (activePreset) {
         applyPreset(activePreset, value);
@@ -576,7 +568,6 @@ export function CsvImport({
         setOptions((o) => ({ ...o, transfers: {} }));
         setMissingNotice(null);
         resetRowChoices();
-        setDone(false);
       }
     } catch (e) {
       setError((e as Error).message);
@@ -595,19 +586,10 @@ export function CsvImport({
         : [];
     });
     setBusy(true);
-    setTotal(creates.length);
-    setProgress(0);
     setError("");
     try {
       await onImport(
         creates.map((r) => r.transaction!),
-        (n) => {
-          setProgress(n);
-          setExcluded(
-            (prev) =>
-              new Set([...prev, ...creates.slice(0, n).map((r) => r.index)]),
-          );
-        },
         paired,
       );
       // Saving continues in the background queue.
@@ -621,37 +603,54 @@ export function CsvImport({
     }
   }
   return (
-    <dialog
-      ref={dialog}
+    <ImportModalShell
+      dialogRef={dialog}
       className="modal csv-modal"
-      aria-labelledby="csv-title"
-      onCancel={(e) => {
-        e.preventDefault();
-        if (!busy) onClose();
-      }}
+      titleId="csv-title"
+      eyebrow="BRING YOUR MONEY INTO VIEW"
+      title="Import CSV"
+      closeLabel="Close import"
+      busy={busy}
+      onClose={onClose}
+      actions={
+        <>
+          {categoryCounts.total > 0 && (
+            <ImportProgress
+              label="Categories created"
+              value={categoryCounts.saved}
+              total={categoryCounts.total}
+            />
+          )}
+          {reading && (
+            <div className="import-progress">
+              <p role="status">Reading CSV file…</p>
+              <progress aria-label="Reading CSV file" />
+            </div>
+          )}
+          <button className="secondary" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="primary"
+            disabled={busy || reading || !!parseError || !selected.length}
+            onClick={() => void submit()}
+          >
+            {busy
+              ? creatingAll || creating
+                ? "Creating categories…"
+                : "Importing…"
+              : `Import ${selected.length} transactions`}
+          </button>
+        </>
+      }
     >
-      <div className="modal-head">
-        <div>
-          <span className="eyebrow">BRING YOUR MONEY INTO VIEW</span>
-          <h2 id="csv-title">Import CSV</h2>
-        </div>
-        <button
-          className="icon-button"
-          disabled={busy}
-          onClick={onClose}
-          aria-label="Close import"
-        >
-          ×
-        </button>
-      </div>
-      <div className="csv-body">
         <p className="muted">
           Choose a bank CSV, match its columns, then review before importing.
           Amounts are in AED. Mark transfers below and choose the other account.
           Positive amounts arrive in the import account; negative amounts leave
           it.
         </p>
-        <fieldset disabled={busy || done || reading}>
+        <fieldset disabled={busy || reading}>
           <CsvPresetBar
             presets={presets}
             presetsState={presetsState}
@@ -822,30 +821,28 @@ export function CsvImport({
             uncategorized.
           </p>
         </fieldset>
-        {!done && (
-          <CsvMissingCategories
-            missingCategories={missingCategories}
-            busy={busy}
-            reading={reading}
-            manualCategories={manualCategories}
-            creating={creating}
-            onToggleManual={() => setManualCategories((value) => !value)}
-            onSetCreating={setCreating}
-            onCreateAll={() => void createAllCategories()}
-            onCreateOne={async (value) => {
-              setBusy(true);
-              setError("");
-              try {
-                await onCreateCategory(value);
-                setCreating(null);
-              } catch (e) {
-                setError((e as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          />
-        )}
+        <CsvMissingCategories
+          missingCategories={missingCategories}
+          busy={busy}
+          reading={reading}
+          manualCategories={manualCategories}
+          creating={creating}
+          onToggleManual={() => setManualCategories((value) => !value)}
+          onSetCreating={setCreating}
+          onCreateAll={() => void createAllCategories()}
+          onCreateOne={async (value) => {
+            setBusy(true);
+            setError("");
+            try {
+              await onCreateCategory(value);
+              setCreating(null);
+            } catch (e) {
+              setError((e as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
         {categoryProgress && <p role="status">{categoryProgress}</p>}
         {(parseError || error) && (
           <p role="alert" className="notice">
@@ -859,7 +856,6 @@ export function CsvImport({
           skip={skip}
           header={header}
           busy={busy}
-          done={done}
           parseError={parseError}
           preview={preview}
           visible={visible}
@@ -889,49 +885,6 @@ export function CsvImport({
           }
           onChangeTransfers={(next) => change("transfers", next)}
         />
-        {done && (
-          <p role="status">Imported {progress} transactions successfully.</p>
-        )}
-      </div>
-      <div className="modal-actions">
-        {categoryCounts.total > 0 && total === 0 && (
-          <ImportProgress
-            label="Categories created"
-            value={categoryCounts.saved}
-            total={categoryCounts.total}
-          />
-        )}
-        {total > 0 && (
-          <ImportProgress
-            label="Transactions imported"
-            value={progress}
-            total={total}
-          />
-        )}
-        {reading && (
-          <div className="import-progress">
-            <p role="status">Reading CSV file…</p>
-            <progress aria-label="Reading CSV file" />
-          </div>
-        )}
-
-        <button className="secondary" disabled={busy} onClick={onClose}>
-          {done ? "Done" : "Cancel"}
-        </button>
-        {!done && (
-          <button
-            className="primary"
-            disabled={busy || reading || !!parseError || !selected.length}
-            onClick={() => void submit()}
-          >
-            {busy
-              ? creatingAll || creating
-                ? "Creating categories…"
-                : "Importing…"
-              : `Import ${selected.length} transactions`}
-          </button>
-        )}
-      </div>
-    </dialog>
+    </ImportModalShell>
   );
 }

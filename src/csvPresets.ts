@@ -2,6 +2,7 @@
 // localStorage is used in demo mode, when no backend is configured, and as a
 // fallback until the server migration is installed. Presets left in
 // localStorage by older versions are uploaded to the account on first load.
+import { MissingCollectionError } from "./backend.ts";
 import { parseCsv, type CsvOptions } from "./csv.ts";
 import { plural } from "./domain.ts";
 
@@ -540,7 +541,7 @@ function sortPresets<T extends { preset: CsvPreset }>(entries: T[]): T[] {
 }
 
 /** Replaces the browser copy; an empty list removes the key entirely. */
-export function replaceLocalPresets(
+function replaceLocalPresets(
   storage: PresetStorage | null | undefined,
   presets: CsvPreset[],
 ): boolean {
@@ -586,9 +587,7 @@ export function createLocalPresetStore(
 }
 
 function isMissingCollectionError(e: unknown): boolean {
-  return (
-    e instanceof Error && e.message.includes("Install the PocketBase migration")
-  );
+  return e instanceof MissingCollectionError;
 }
 
 

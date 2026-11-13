@@ -1,4 +1,4 @@
-import type { IntelligentForecast } from "./recurringAutomation.ts";
+import type { IntelligentForecast } from "./recurringForecast.ts";
 import { formatShortDate } from "./RecurringView";
 
 export function RecurringInsightsTab({

@@ -16,7 +16,7 @@ import type {
   RecurringSchedule,
 } from "./domain.ts";
 import { describeScheduleStatus } from "./recurring.ts";
-import type { IntelligentForecast } from "./recurringAutomation.ts";
+import type { IntelligentForecast } from "./recurringForecast.ts";
 import {
   formatFullDate,
   frequencyLabels,

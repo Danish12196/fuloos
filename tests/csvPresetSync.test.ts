@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { DatabaseSync } from "node:sqlite";
+import { MissingCollectionError } from "../src/backend.ts";
 import {
   buildPreset,
   createAccountPresetStore,
@@ -239,8 +240,9 @@ test("account store falls back to browser storage until the server migration exi
   const storage = createMockStorage(localBlob([preset("ADCB")]));
   const m = createMockRemote();
   m.failList(
-    new Error(
+    new MissingCollectionError(
       "Fuloos backend is not configured yet. Install the PocketBase migration before using live accounts.",
+      404,
     ),
   );
   const store = createAccountPresetStore(m.remote, storage);

@@ -129,10 +129,6 @@
 }
 
 /* Pop-ups: every dialog opens centred with a soft fade-and-lift. */
-.modal {
-  margin: auto;
-  border: 1px solid var(--line);
-}
 .modal[open] {
   animation: modal-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15);
 }

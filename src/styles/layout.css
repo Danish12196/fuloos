@@ -151,12 +151,14 @@ footer {
   color: #6d8260;
 }
 .modal {
-  border: 0;
+  margin: auto;
+  border: 1px solid var(--line);
   border-radius: 15px;
   padding: 28px;
   width: 480px;
   max-width: calc(100vw - 30px);
   max-height: 90vh;
+  background: var(--surface);
   color: var(--text);
   box-shadow: 0 25px 100px #12251825;
 }

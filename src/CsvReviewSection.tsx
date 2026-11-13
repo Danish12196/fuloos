@@ -31,7 +31,6 @@ export function CsvReviewSection({
   skip,
   header,
   busy,
-  done,
   parseError,
   preview,
   visible,
@@ -60,7 +59,6 @@ export function CsvReviewSection({
   skip: number;
   header: boolean;
   busy: boolean;
-  done: boolean;
   parseError: string;
   preview: CsvPreviewRow[];
   visible: CsvPreviewRow[];
@@ -88,7 +86,7 @@ export function CsvReviewSection({
 
   return (
     <>
-      {matches.length > 0 && !parseError && !done && (
+      {matches.length > 0 && !parseError && (
         <section className="transfer-matches" aria-labelledby="tm-title">
           <h3 id="tm-title">Transfers between your accounts</h3>
           <p className="muted">
@@ -186,7 +184,7 @@ export function CsvReviewSection({
           <label className="csv-check">
             <input
               type="checkbox"
-              disabled={busy || done}
+              disabled={busy}
               checked={includeDuplicates}
               onChange={(e) => onSetIncludeDuplicates(e.target.checked)}
             />
@@ -230,7 +228,6 @@ export function CsvReviewSection({
                         aria-label={`Include row ${r.index + 1}`}
                         disabled={
                           busy ||
-                          done ||
                           !r.transaction ||
                           (r.duplicate && !includeDuplicates)
                         }
@@ -264,7 +261,7 @@ export function CsvReviewSection({
                     <td>
                       <select
                         aria-label={`Transfer account for row ${r.index + skip + (header ? 2 : 1)}`}
-                        disabled={busy || done}
+                        disabled={busy}
                         value={transfers[r.index] ?? ""}
                         onChange={(e) =>
                           onChangeTransfers({
@@ -301,7 +298,7 @@ export function CsvReviewSection({
                             <button
                               type="button"
                               className="text-button"
-                              disabled={busy || done}
+                              disabled={busy}
                               onClick={() => onDecide([r.index], "reject")}
                             >
                               Not a transfer
@@ -317,7 +314,7 @@ export function CsvReviewSection({
                             <button
                               type="button"
                               className="text-button"
-                              disabled={busy || done}
+                              disabled={busy}
                               onClick={() => onDecide([r.index], "accept")}
                             >
                               Confirm

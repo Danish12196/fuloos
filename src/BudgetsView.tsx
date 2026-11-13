@@ -42,7 +42,7 @@ const shortMonth = (month: string) =>
     timeZone: "Asia/Dubai",
   });
 
-export function budgetPeriod(b: Pick<Budget, "start_month" | "end_month">) {
+function budgetPeriod(b: Pick<Budget, "start_month" | "end_month">) {
   if (!b.end_month) return `Every month from ${shortMonth(b.start_month)}`;
   if (b.end_month === b.start_month) return `${shortMonth(b.start_month)} only`;
   return `${shortMonth(b.start_month)} – ${shortMonth(b.end_month)}`;
