@@ -170,6 +170,28 @@ test("loadModel refuses plain exports and damaged files", () => {
   const hashed = hashModel(tinyPlainModel(), 24);
   hashed.intercept[0] += 5;
   assert.throws(() => loadModel(hashed), /self-check failed/);
+
+  const zeroScale = hashModel(tinyPlainModel(), 24);
+  zeroScale.amount.scale = 0;
+  assert.throws(() => loadModel(zeroScale), /amount scaling is inconsistent/i);
+
+  const nanScale = hashModel(tinyPlainModel(), 24);
+  nanScale.amount.scale = Number.NaN;
+  assert.throws(() => loadModel(nanScale), /amount scaling is inconsistent/i);
+
+  const emptyCheck = hashModel(tinyPlainModel(), 24);
+  emptyCheck.check.text = [];
+  assert.throws(() => loadModel(emptyCheck), /inconsistent/i);
+
+  const badCal = hashModel(tinyPlainModel(), 24);
+  badCal.calibration!.a = badCal.calibration!.a.slice(1);
+  assert.throws(() => loadModel(badCal), /inconsistent/i);
+});
+
+test("loadLedgerModel returns off when VITE_LEDGER_MODEL_URL is unset", async () => {
+  const { loadLedgerModel } = await import("../src/ledger/loader.ts");
+  const state = await loadLedgerModel();
+  assert.deepEqual(state, { status: "off" });
 });
 
 test("category names are guessed at word starts", () => {

@@ -63,8 +63,15 @@ export interface DashboardRecurringSummary {
   };
 }
 
+function utcDate(year: number, monthIndex: number, day: number): Date {
+  const d = new Date(0);
+  d.setUTCFullYear(year, monthIndex, day);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
+
 export function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return utcDate(year, month, 0).getUTCDate();
 }
 
 export function parseIsoDate(
@@ -102,7 +109,8 @@ export function addDays(date: string, days: number): string {
   const parsed = parseIsoDate(date);
   if (!parsed) throw new Error("Choose a valid date.");
   const d = new Date(
-    Date.UTC(parsed.year, parsed.month - 1, parsed.day) + days * 86_400_000,
+    utcDate(parsed.year, parsed.month - 1, parsed.day).getTime() +
+      days * 86_400_000,
   );
   return formatIsoDate(
     d.getUTCFullYear(),
@@ -116,8 +124,8 @@ export function daysBetween(start: string, end: string): number {
   const e = parseIsoDate(end);
   if (!s || !e) throw new Error("Choose a valid date.");
   return Math.round(
-    (Date.UTC(e.year, e.month - 1, e.day) -
-      Date.UTC(s.year, s.month - 1, s.day)) /
+    (utcDate(e.year, e.month - 1, e.day).getTime() -
+      utcDate(s.year, s.month - 1, s.day).getTime()) /
       86_400_000,
   );
 }

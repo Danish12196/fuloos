@@ -172,13 +172,13 @@ function fitToChain<T extends SeriesItem>(
   chain: SeriesChain<T>,
   item: T,
   tokens: Map<string, Set<string>>,
+  median: number,
 ): FitResult | null {
   const rule = CADENCE_RULES[chain.frequency];
   const last = chain.members[chain.members.length - 1];
   const gap = daysBetween(last.item.date, item.date);
   const cycles = cyclesForGap(gap, chain.frequency);
   if (!cycles) return null;
-  const median = chainMedianAmount(chain);
   if (!amountInBand(item.amount, median)) return null;
   const dateCost =
     Math.abs(gap - cycles * rule.periodDays) / rule.toleranceDays;
@@ -208,24 +208,29 @@ export function buildChains<T extends SeriesItem>(
   textOf: (item: T) => string | undefined = (item) => item.text,
 ): SeriesChain<T>[] {
   const rule = CADENCE_RULES[frequency];
+  const maxGap = rule.maxCyclesPerGap * rule.periodDays + rule.toleranceDays;
   const sorted = [...items].sort(
     (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
   );
   const tokens = new Map(sorted.map((it) => [it.id, textTokens(textOf(it))]));
   const chains: SeriesChain<T>[] = [];
+  const chainMedians = new Map<SeriesChain<T>, number>();
   for (let index = 0; index < sorted.length; index++) {
     const item = sorted[index];
     let bestChain: SeriesChain<T> | null = null;
     let bestCycles = 0;
     let bestCost = Infinity;
     for (const chain of chains) {
-      const fit = fitToChain(chain, item, tokens);
+      const lastDate = chain.members[chain.members.length - 1].item.date;
+      if (daysBetween(lastDate, item.date) > maxGap) continue;
+      const median = chainMedians.get(chain)!;
+      const fit = fitToChain(chain, item, tokens, median);
       if (!fit) continue;
       let betterLater = false;
       for (let j = index + 1; j < sorted.length; j++) {
         const later = sorted[j];
         if (daysBetween(item.date, later.date) > rule.toleranceDays) break;
-        const laterFit = fitToChain(chain, later, tokens);
+        const laterFit = fitToChain(chain, later, tokens, median);
         if (laterFit && laterFit.cost + 0.15 < fit.cost) {
           betterLater = true;
           break;
@@ -241,8 +246,11 @@ export function buildChains<T extends SeriesItem>(
     if (bestChain) {
       const last = bestChain.members[bestChain.members.length - 1];
       bestChain.members.push({ item, step: last.step + bestCycles });
+      chainMedians.set(bestChain, chainMedianAmount(bestChain));
     } else {
-      chains.push({ frequency, members: [{ item, step: 0 }] });
+      const next: SeriesChain<T> = { frequency, members: [{ item, step: 0 }] };
+      chains.push(next);
+      chainMedians.set(next, item.amount);
     }
   }
   return chains;

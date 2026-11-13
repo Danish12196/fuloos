@@ -136,6 +136,59 @@ test("rebaseEdit keeps earlier queued changes to other fields", async () => {
   });
 });
 
+test("rebaseEdit enforces category_id/to_account_id invariants on type conversion", async () => {
+  const { rebaseEdit } = await import("../src/bulk.ts");
+  const original: Transaction = {
+    id: "t1",
+    type: "expense",
+    amount: 5000,
+    account_id: "bank",
+    to_account_id: null,
+    category_id: null,
+    date: "2026-11-04",
+    payee: "Transfer",
+    notes: "",
+  };
+  // Earlier queued edit sets category_id: "food"
+  const afterFirst: Transaction = { ...original, category_id: "food" };
+  // Second queued edit converts uncategorized expense -> transfer
+  const second: Transaction = {
+    ...original,
+    type: "transfer",
+    to_account_id: "card",
+    category_id: null,
+  };
+  const rebasedToTransfer = rebaseEdit(original, second, afterFirst);
+  assert.equal(rebasedToTransfer.type, "transfer");
+  assert.equal(rebasedToTransfer.to_account_id, "card");
+  assert.equal(rebasedToTransfer.category_id, null);
+
+  // Reverse: transfer -> expense when earlier edit changed to_account_id
+  const transferOrig: Transaction = {
+    ...original,
+    type: "transfer",
+    to_account_id: "card",
+  };
+  const transferAfterFirst: Transaction = {
+    ...transferOrig,
+    to_account_id: "sav",
+  };
+  const secondExpense: Transaction = {
+    ...transferOrig,
+    type: "expense",
+    to_account_id: null,
+    category_id: "food",
+  };
+  const rebasedToExpense = rebaseEdit(
+    transferOrig,
+    secondExpense,
+    transferAfterFirst,
+  );
+  assert.equal(rebasedToExpense.type, "expense");
+  assert.equal(rebasedToExpense.to_account_id, null);
+  assert.equal(rebasedToExpense.category_id, "food");
+});
+
 test("sharedFields reports only values every row has in common", async () => {
   const { sharedFields } = await import("../src/bulk.ts");
   const other = { ...income, id: "two", amount: 900, notes: "Other" };

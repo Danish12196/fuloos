@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImportProgress } from "./ImportProgress";
-import { money, type Ledger } from "./domain";
+import { money, uaeToday, type Ledger } from "./domain";
 import type { ImportTransaction } from "./csv";
 import { CANONICAL, CANONICAL_LABEL } from "./ledger/categoriser";
 import { loadLedgerModel, type ModelState } from "./ledger/loader";
@@ -20,11 +20,6 @@ import {
   splitPastedSms,
   type RawSms,
 } from "./ledger/sms";
-
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
 
 type Edit = Partial<Pick<ImportTransaction, "date" | "payee" | "category_id">>;
 
@@ -54,7 +49,7 @@ export function SmsImport({
   });
   const [account, setAccount] = useState(ledger.accounts[0]?.id ?? "");
   const [bank, setBank] = useState("");
-  const [fallbackDate, setFallbackDate] = useState(today());
+  const [fallbackDate, setFallbackDate] = useState(() => uaeToday());
   const [pasted, setPasted] = useState("");
   const [fileMessages, setFileMessages] = useState<RawSms[] | null>(null);
   const [filename, setFilename] = useState("");
@@ -136,46 +131,78 @@ export function SmsImport({
       ),
     [messages, account, fallbackDate, bank, ledger, suggest],
   );
+  const categoryById = useMemo(
+    () => new Map(ledger.categories.map((c) => [c.id, c])),
+    [ledger.categories],
+  );
   // Duplicates are re-checked on the edited values (a changed date or payee can create or clear one).
-  const rows = markDuplicates(
-    preview.map((r) => ({
-      ...r,
-      transaction: r.transaction
-        ? { ...r.transaction, ...edits[r.index] }
-        : null,
-    })),
-    ledger,
+  const rows = useMemo(
+    () =>
+      markDuplicates(
+        preview.map((r) => ({
+          ...r,
+          transaction: r.transaction
+            ? { ...r.transaction, ...edits[r.index] }
+            : null,
+        })),
+        ledger,
+      ),
+    [preview, edits, ledger],
   );
-  const importable = rows.filter((r) => r.transaction);
-  const skipped = rows.filter((r) => r.skipped);
-  const invalid = rows.filter((r) => r.error);
-  const selected = importable.filter(
-    (r) => !excluded.has(r.index) && (!r.duplicate || includeDuplicates),
+  const { importable, skipped, invalid } = useMemo(() => {
+    const imp: typeof rows = [];
+    const skp: typeof rows = [];
+    const inv: typeof rows = [];
+    for (const r of rows) {
+      if (r.transaction) imp.push(r);
+      if (r.skipped) skp.push(r);
+      if (r.error) inv.push(r);
+    }
+    return { importable: imp, skipped: skp, invalid: inv };
+  }, [rows]);
+  const selected = useMemo(
+    () =>
+      importable.filter(
+        (r) => !excluded.has(r.index) && (!r.duplicate || includeDuplicates),
+      ),
+    [importable, excluded, includeDuplicates],
   );
-  const needsReview = selected.filter(
-    (r) =>
-      r.transaction!.type === "expense" &&
-      (r.suggestion?.needsReview || !r.transaction!.category_id),
+  const needsReview = useMemo(
+    () =>
+      selected.filter(
+        (r) =>
+          r.transaction!.type === "expense" &&
+          (r.suggestion?.needsReview || !r.transaction!.category_id),
+      ),
+    [selected],
   );
-  const visible = showSkipped ? rows : rows.filter((r) => !r.skipped);
+  const visible = useMemo(
+    () => (showSkipped ? rows : rows.filter((r) => !r.skipped)),
+    [showSkipped, rows],
+  );
 
   function edit(index: number, patch: Edit) {
     setEdits((prev) => ({ ...prev, [index]: { ...prev[index], ...patch } }));
   }
+  const mapSaveSeq = useRef(0);
   function updateMap(next: CategoryMap) {
     setMap(next);
     saveMap(owner, next);
     if (settings) {
       const updated = { ...settings, category_map: next };
       setSettings(updated);
+      const seq = ++mapSaveSeq.current;
       learning
         .saveSettings(updated)
-        .then(setSettings)
-        .catch((e: unknown) =>
-          setLearningError(
-            `Could not save the mapping: ${e instanceof Error ? e.message : "unknown error"}`,
-          ),
-        );
+        .then((saved) => {
+          if (mapSaveSeq.current === seq) setSettings(saved);
+        })
+        .catch((e: unknown) => {
+          if (mapSaveSeq.current === seq)
+            setLearningError(
+              `Could not save the mapping: ${e instanceof Error ? e.message : "unknown error"}`,
+            );
+        });
     }
   }
   async function setLearn(on: boolean) {
@@ -376,7 +403,7 @@ export function SmsImport({
               <input
                 type="date"
                 value={fallbackDate}
-                onChange={(e) => setFallbackDate(e.target.value || today())}
+                onChange={(e) => setFallbackDate(e.target.value || uaeToday())}
               />
             </label>
           </div>
@@ -682,9 +709,8 @@ export function SmsImport({
                                   {" "}
                                   {s.canonical
                                     ? CANONICAL_LABEL[s.canonical]
-                                    : (ledger.categories.find(
-                                        (c) => c.id === s.category_id,
-                                      )?.name ?? "")}{" "}
+                                    : (categoryById.get(s.category_id ?? "")
+                                        ?.name ?? "")}{" "}
                                   · {Math.round(s.confidence * 100)}% (
                                   {s.decidedBy})
                                 </small>

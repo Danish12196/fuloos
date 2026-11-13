@@ -110,7 +110,7 @@ export function minor(value: string): number {
   const result = Number(whole) * 100 + Number(part.padEnd(2, "0"));
   if (!Number.isSafeInteger(result) || Math.abs(result) > 100_000_000_000)
     throw new Error("Amount is too large.");
-  return negative ? -result : result;
+  return result === 0 ? 0 : negative ? -result : result;
 }
 export const money = (amount: number) =>
   new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED" }).format(
@@ -245,3 +245,5 @@ export const uaeToday = (at: Date = new Date()) =>
     day: "2-digit",
   }).format(at);
 export const today = () => uaeToday();
+export const plural = (n: number, one: string, many = `${one}s`) =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`;

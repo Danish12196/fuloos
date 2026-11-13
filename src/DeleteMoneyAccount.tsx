@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { errorMessage, type Account } from "./domain";
+import { errorMessage, plural, type Account } from "./domain";
 import {
   confirmsAccountDeletion,
   deleteAccountPhrase,
@@ -8,9 +8,6 @@ import {
 } from "./accountDeletion";
 
 const DELETE_COUNTDOWN_SECONDS = 5;
-
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n} ${n === 1 ? one : many}`;
 
 /** Confirms deleting a money account (and all its transactions) by typing its name. */
 export function DeleteMoneyAccountDialog({

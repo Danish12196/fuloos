@@ -1,10 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { errorMessage, type Category } from "./domain";
+import { errorMessage, plural, type Category } from "./domain";
 import type { CategoryDeletionPlan } from "./categoryDeletion";
-
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 const UNCATEGORISED = "";
 const SHOWN_NAMES = 6;

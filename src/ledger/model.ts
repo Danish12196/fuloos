@@ -340,6 +340,24 @@ export function loadModel(json: unknown): LoadedModel {
     M.word.idf.length !== M.word.buckets.length
   )
     throw new Error("Model vocabulary is inconsistent.");
+  if (
+    !H.amount ||
+    !Number.isFinite(H.amount.mean) ||
+    !Number.isFinite(H.amount.scale) ||
+    H.amount.scale === 0
+  )
+    throw new Error("Model amount scaling is inconsistent.");
+  if (
+    H.calibration &&
+    (H.calibration.a?.length !== K || H.calibration.b?.length !== K)
+  )
+    throw new Error("Model calibration is inconsistent.");
+  if (
+    !H.check?.text?.length ||
+    H.check.amount?.length !== H.check.text.length ||
+    H.check.proba?.length !== H.check.text.length
+  )
+    throw new Error("Model self-check is missing or inconsistent.");
   H.check.text.forEach((t, i) => {
     const p = predictProba(M, t, H.check.amount[i]);
     if (p.some((v, k) => Math.abs(v - H.check.proba[i][k]) > 1e-4))

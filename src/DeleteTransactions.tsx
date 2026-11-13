@@ -3,14 +3,12 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import {
   errorMessage,
   money,
+  plural,
   type Account,
   type Category,
   type Transaction,
 } from "./domain";
 import { deletionTotals, type TransactionDeletionPlan } from "./transactionDeletion";
-
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 const SHOWN_ROWS = 5;
 
