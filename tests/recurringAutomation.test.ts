@@ -580,7 +580,7 @@ test("analyzeScheduleHistory derives observed day jitter and variable amount bou
     { id: "ro3", recurring_id: "rec_dewa", occurrence_date: "2026-08-25", transaction_id: "tx_d3" },
   ];
 
-  const profile = analyzeScheduleHistory(schedule, ledger, "2026-09-01");
+  const profile = analyzeScheduleHistory(schedule, ledger);
   assert.equal(profile.sampleCount, 3);
   assert.equal(profile.hasRange, true);
   assert.equal(profile.lowAmount, 42000);
@@ -702,4 +702,98 @@ test("buildIntelligentForecast never double counts confirmed occurrences", () =>
   // Forecast must NOT count it again as an upcoming commitment in the 30-day forecast!
   forecast = buildIntelligentForecast(ledger, asOf);
   assert.equal(forecast.horizons[30].expense.expected, 0);
+});
+
+test("buildIntelligentForecast propagates variable schedule low/high ranges into horizons", () => {
+  const ledger = createTestLedger();
+  const schedule: RecurringSchedule = {
+    id: "rec_dewa_var",
+    name: "DEWA",
+    type: "expense",
+    amount: 44000,
+    amount_type: "variable",
+    account_id: "acc_current",
+    category_id: "cat_bills",
+    frequency: "monthly",
+    start_date: "2026-06-15",
+    end_date: null,
+    status: "active",
+    notes: "",
+  };
+  ledger.recurring = [schedule];
+  ledger.transactions = [
+    {
+      id: "d1",
+      type: "expense",
+      amount: 40000,
+      account_id: "acc_current",
+      to_account_id: null,
+      category_id: "cat_bills",
+      date: "2026-06-15",
+      payee: "DEWA",
+      notes: "",
+    },
+    {
+      id: "d2",
+      type: "expense",
+      amount: 50000,
+      account_id: "acc_current",
+      to_account_id: null,
+      category_id: "cat_bills",
+      date: "2026-07-15",
+      payee: "DEWA",
+      notes: "",
+    },
+  ];
+  ledger.recurring_occurrences = [
+    { id: "o1", recurring_id: "rec_dewa_var", occurrence_date: "2026-06-15", transaction_id: "d1" },
+    { id: "o2", recurring_id: "rec_dewa_var", occurrence_date: "2026-07-15", transaction_id: "d2" },
+  ];
+
+  const forecast = buildIntelligentForecast(ledger, "2026-08-01");
+  assert.equal(forecast.horizons[30].expense.low, 40000);
+  assert.equal(forecast.horizons[30].expense.high, 50000);
+  assert.equal(forecast.horizons[30].expense.expected, 46667);
+});
+
+test("reconcileTransactions respects auto_match=off and skips already-linked transactions", () => {
+  const ledger = createTestLedger();
+  ledger.recurring = [
+    {
+      id: "rec_nf",
+      name: "Netflix",
+      type: "expense",
+      amount: 5500,
+      amount_type: "fixed",
+      account_id: "acc_current",
+      category_id: "cat_sub",
+      frequency: "monthly",
+      start_date: "2026-08-10",
+      end_date: null,
+      status: "active",
+      notes: "",
+    },
+  ];
+  ledger.transactions = [
+    {
+      id: "tx_nf",
+      type: "expense",
+      amount: 5500,
+      account_id: "acc_current",
+      to_account_id: null,
+      category_id: "cat_sub",
+      date: "2026-08-10",
+      payee: "NETFLIX.COM",
+      notes: "",
+    },
+  ];
+  ledger.recurring_prefs = {
+    auto_detect: "on",
+    auto_match: "off",
+    dismissed_keys: [],
+  };
+
+  const offResult = reconcileTransactions(ledger, { asOfDate: "2026-08-12" });
+  assert.equal(offResult.autoLinks.length, 0);
+  assert.equal(offResult.reviewCandidates.length, 0);
 });

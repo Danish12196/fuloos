@@ -1,5 +1,6 @@
 /* UAE bank SMS parser and merchant cleaner, ported from ledger-uae-banks (sms_transactions_pipeline.ipynb via
    site/try/sms.js). Pure functions: SMS text is parsed in the browser and never sent anywhere. */
+import { uaeToday } from "../domain.ts";
 import { LEDGER_RULES as T } from "./rules.generated.ts";
 
 export type SmsType =
@@ -224,8 +225,14 @@ export function dateInText(message: string): string | null {
     const month = MONTHS.indexOf(m[2].toUpperCase()) + 1;
     if (month) return valid(+m[3], month, +m[1]);
   }
-  m = /\b(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})\b/.exec(message);
-  if (m) return valid(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[2], +m[1]);
+  for (const match of message.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})\b/g)) {
+    const iso = valid(
+      match[3].length === 2 ? 2000 + +match[3] : +match[3],
+      +match[2],
+      +match[1],
+    );
+    if (iso) return iso;
+  }
   return null;
 }
 
@@ -325,9 +332,6 @@ export function splitPastedSms(text: string): RawSms[] {
     .map((message) => ({ message, date: null, sender: null }));
 }
 
-const localDate = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
 /** "SMS Backup & Restore" XML: received messages only (type 2 = sent). */
 export function smsFromBackupXml(
   xml: string,
@@ -340,9 +344,10 @@ export function smsFromBackupXml(
     .filter((n) => n.getAttribute("type") !== "2")
     .map((n) => {
       const ms = Number(n.getAttribute("date"));
+      const d = Number.isFinite(ms) && ms > 0 ? new Date(ms) : null;
       return {
         message: (n.getAttribute("body") || "").trim(),
-        date: Number.isFinite(ms) && ms > 0 ? localDate(new Date(ms)) : null,
+        date: d && !Number.isNaN(d.getTime()) ? uaeToday(d) : null,
         sender: n.getAttribute("address"),
       };
     })

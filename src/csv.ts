@@ -20,7 +20,12 @@ export interface CsvOptions {
   dateFormat: "DMY" | "MDY" | "YMD";
   account: string;
 }
-export function parseCsv(text: string, delimiter = ","): string[][] {
+export function parseCsv(
+  text: string,
+  delimiter = ",",
+  options?: { limit?: number },
+): string[][] {
+  const limit = options?.limit;
   const rows: string[][] = [];
   let row: string[] = [],
     field = "",
@@ -44,7 +49,12 @@ export function parseCsv(text: string, delimiter = ","): string[][] {
       field = "";
       closed = false;
       if (c !== delimiter) {
-        if (row.some((v) => v.trim())) rows.push(row);
+        if (row.some((v) => v.trim())) {
+          rows.push(row);
+          if (limit === undefined && rows.length > 10001)
+            throw new Error("Import at most 10,000 rows at a time.");
+          if (limit !== undefined && rows.length >= limit) return rows;
+        }
         row = [];
         if (c === "\r" && text[i + 1] === "\n") i++;
       }
@@ -57,9 +67,11 @@ export function parseCsv(text: string, delimiter = ","): string[][] {
   }
   if (quoted) throw new Error("CSV contains an unclosed quoted field.");
   row.push(field);
-  if (row.some((v) => v.trim())) rows.push(row);
-  if (rows.length > 10001)
-    throw new Error("Import at most 10,000 rows at a time.");
+  if (row.some((v) => v.trim())) {
+    rows.push(row);
+    if (limit === undefined && rows.length > 10001)
+      throw new Error("Import at most 10,000 rows at a time.");
+  }
   return rows;
 }
 export function csvDate(

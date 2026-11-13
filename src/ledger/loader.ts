@@ -11,7 +11,7 @@ export type ModelState =
 let pending: Promise<ModelState> | null = null;
 
 export function modelUrl(): string {
-  return (import.meta.env.VITE_LEDGER_MODEL_URL ?? "").trim();
+  return (import.meta.env?.VITE_LEDGER_MODEL_URL ?? "").trim();
 }
 
 export function loadLedgerModel(): Promise<ModelState> {

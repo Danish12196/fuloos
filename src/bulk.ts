@@ -65,6 +65,14 @@ export function rebaseEdit<T extends object>(
   const next = { ...latest };
   for (const key of Object.keys(edited) as (keyof T)[])
     if (edited[key] !== original[key]) next[key] = edited[key];
+  if ("type" in next) {
+    const tx = next as Record<string, unknown>;
+    if (tx.type === "transfer") {
+      tx.category_id = null;
+    } else {
+      tx.to_account_id = null;
+    }
+  }
   return next;
 }
 

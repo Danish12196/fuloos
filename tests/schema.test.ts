@@ -562,3 +562,130 @@ test("PocketBase migration defines neutral categories and tenant rules; SQLite g
     db.close();
   }
 });
+
+test("hardening migration clears orphaned ml_examples, blocks NULL bypasses, isolates fuloos_users, and enforces csv_presets name_key", async () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`
+      CREATE TABLE fuloos_accounts(id TEXT PRIMARY KEY,user_id TEXT,name TEXT,type TEXT,color TEXT,opening_balance INTEGER,opening_date TEXT);
+      CREATE TABLE fuloos_categories(id TEXT PRIMARY KEY,user_id TEXT,name TEXT,color TEXT,description TEXT);
+      CREATE TABLE fuloos_transactions(id TEXT PRIMARY KEY,user_id TEXT,type TEXT,amount INTEGER,account_id TEXT,to_account_id TEXT DEFAULT '',category_id TEXT DEFAULT '',date TEXT,payee TEXT,notes TEXT);
+      CREATE TABLE fuloos_ml_examples(id TEXT PRIMARY KEY,user_id TEXT,merchant_text TEXT,payee TEXT,amount INTEGER,category_id TEXT DEFAULT '',source TEXT);
+      CREATE TABLE fuloos_csv_presets(id TEXT PRIMARY KEY,user_id TEXT,name TEXT,name_key TEXT,config TEXT);
+      INSERT INTO fuloos_accounts VALUES('a','user-a','Bank','current','#000000',0,'2026-01-01'),('b','user-a','Card','credit_card','#000000',0,'2026-01-01');
+      INSERT INTO fuloos_categories VALUES('cat1','user-a','Food','#000000','');
+      INSERT INTO fuloos_ml_examples VALUES('ex1','user-a','CARREFOUR','Carrefour',500,'cat1','sms');
+    `);
+
+    const users: Record<string, unknown> = {
+      name: "fuloos_users",
+      listRule: "id = @request.auth.id",
+      viewRule: "id = @request.auth.id",
+      updateRule: "id = @request.auth.id",
+    };
+    const app = {
+      findCollectionByNameOrId: (name: string) => {
+        if (name === "fuloos_users") return users;
+        throw new Error(`unexpected collection ${name}`);
+      },
+      save: () => {},
+      db: () => ({
+        newQuery: (sql: string) => ({ execute: () => db.exec(sql) }),
+      }),
+    };
+
+    let downFn: ((app: unknown) => void) | undefined;
+    runInNewContext(
+      await readFile(
+        new URL(
+          "../pocketbase/pb_migrations/1794400200_trigger_and_rule_hardening.js",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      {
+        migrate: (up: (app: unknown) => void, down?: (app: unknown) => void) => {
+          downFn = down;
+          up(app);
+        },
+      },
+    );
+
+    // 1. Category delete clears fuloos_ml_examples.category_id
+    db.exec("DELETE FROM fuloos_categories WHERE id='cat1'");
+    assert.equal(
+      db.prepare("SELECT category_id FROM fuloos_ml_examples WHERE id='ex1'").get()
+        ?.category_id,
+      "",
+    );
+
+    // 2. NULL / non-numeric bypasses on fuloos_transactions are rejected
+    assert.throws(
+      () =>
+        db.exec(
+          "INSERT INTO fuloos_transactions(id,user_id,type,amount,account_id,to_account_id,category_id,date) VALUES('t-null','user-a','expense',NULL,'a','','','2026-01-02')",
+        ),
+      /nonnegative integer fils/,
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          "INSERT INTO fuloos_transactions(id,user_id,type,amount,account_id,to_account_id,category_id,date) VALUES('t-str','user-a','expense','abc','a','','','2026-01-02')",
+        ),
+      /nonnegative integer fils/,
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          "INSERT INTO fuloos_transactions(id,user_id,type,amount,account_id,to_account_id,category_id,date) VALUES('t-xfer-null','user-a','transfer',100,'a',NULL,'','2026-01-02')",
+        ),
+      /two different accounts/,
+    );
+    db.exec(
+      "INSERT INTO fuloos_transactions(id,user_id,type,amount,account_id,to_account_id,category_id,date) VALUES('t-ok','user-a','expense',100,'a',NULL,NULL,'2026-01-02')",
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          "UPDATE fuloos_transactions SET amount=NULL WHERE id='t-ok'",
+        ),
+      /nonnegative integer fils/,
+    );
+
+    // 3. fuloos_users auth collection isolation
+    const expectedRule =
+      "@request.auth.collectionName = 'fuloos_users' && id = @request.auth.id";
+    assert.equal(users.listRule, expectedRule);
+    assert.equal(users.viewRule, expectedRule);
+    assert.equal(users.updateRule, expectedRule);
+
+    // 4. fuloos_csv_presets name_key consistency
+    db.exec(
+      `INSERT INTO fuloos_csv_presets(id,user_id,name,name_key,config) VALUES('p1','user-a','  ENBD Bank ','enbd bank','{}')`,
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          `INSERT INTO fuloos_csv_presets(id,user_id,name,name_key,config) VALUES('p2','user-a','ADCB','wrong_key','{}')`,
+        ),
+      /Invalid preset name key/,
+    );
+    assert.throws(
+      () =>
+        db.exec(
+          `UPDATE fuloos_csv_presets SET name='FAB' WHERE id='p1'`,
+        ),
+      /Invalid preset name key/,
+    );
+
+    // 5. Down migration restores previous rules and drops category-delete trigger
+    assert.ok(downFn);
+    downFn!(app);
+    assert.equal(users.listRule, "id = @request.auth.id");
+    assert.equal(users.viewRule, "id = @request.auth.id");
+    assert.equal(users.updateRule, "id = @request.auth.id");
+  } finally {
+    db.close();
+  }
+});
+

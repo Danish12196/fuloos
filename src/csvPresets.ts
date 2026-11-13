@@ -3,6 +3,7 @@
 // fallback until the server migration is installed. Presets left in
 // localStorage by older versions are uploaded to the account on first load.
 import { parseCsv, type CsvOptions } from "./csv.ts";
+import { plural } from "./domain.ts";
 
 export const PRESET_STORAGE_KEY = "fuloos-csv-presets";
 export const MAX_PRESET_NAME_LENGTH = 80;
@@ -435,6 +436,14 @@ export function suggestPreset(
 ): CsvPreset | null {
   if (!csvText || !presets.length) return null;
 
+  const maxLimitByDelimiter = new Map<CsvDelimiter, number>();
+  for (const preset of presets) {
+    if (!preset.header || !preset.headers.length) continue;
+    const prev = maxLimitByDelimiter.get(preset.delimiter) ?? 0;
+    if (preset.skip + 1 > prev)
+      maxLimitByDelimiter.set(preset.delimiter, preset.skip + 1);
+  }
+
   const parsedByDelimiter = new Map<CsvDelimiter, string[][] | null>();
   let multisetMatch: CsvPreset | null = null;
 
@@ -444,7 +453,9 @@ export function suggestPreset(
     let rows = parsedByDelimiter.get(preset.delimiter);
     if (rows === undefined) {
       try {
-        rows = parseCsv(csvText, preset.delimiter);
+        rows = parseCsv(csvText, preset.delimiter, {
+          limit: maxLimitByDelimiter.get(preset.delimiter),
+        });
       } catch {
         rows = null;
       }
@@ -580,9 +591,6 @@ function isMissingCollectionError(e: unknown): boolean {
   );
 }
 
-function plural(n: number, word: string) {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
 
 /**
  * Presets stored in the user's account. On load, any presets left in browser

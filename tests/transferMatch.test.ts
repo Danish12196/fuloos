@@ -258,3 +258,26 @@ test("a row already imported as an expense is left a duplicate, not turned into 
   assert.equal(preview[0].duplicate, true);
   assert.deepEqual(findTransferMatches(preview, "chk", ledger), []);
 });
+
+test("competing CSV rows for the same ledger transaction downgrade sure to likely", () => {
+  const ledger = base();
+  ledger.transactions.push(
+    tx({
+      id: "in1",
+      type: "income",
+      amount: 50000,
+      account_id: "sav",
+      date: "2026-03-02",
+      payee: "From Everyday Bank",
+    }),
+  );
+  // Two non-duplicate CSV rows on consecutive days with the same amount and transfer
+  // wording compete within 1 point for the single ledger transaction "in1".
+  const found = match(ledger, "chk", [
+    ["2026-03-02", "Nest Saver", "", "-500"],
+    ["2026-03-03", "Nest Saver", "", "-500"],
+  ]);
+  const pairMatch = found.find((m) => m.kind === "pair");
+  assert.ok(pairMatch);
+  assert.equal(pairMatch.confidence, "likely");
+});

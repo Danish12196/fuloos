@@ -235,10 +235,14 @@ export function findTransferMatches(
       a.index - b.index,
   );
   const perRow = new Map<number, Candidate[]>();
+  const perTx = new Map<string, Candidate[]>();
   for (const c of candidates) {
     const list = perRow.get(c.index);
     if (list) list.push(c);
     else perRow.set(c.index, [c]);
+    const txList = perTx.get(c.counterpart.id);
+    if (txList) txList.push(c);
+    else perTx.set(c.counterpart.id, [c]);
   }
   const usedRows = new Set<number>();
   const usedTx = new Set<string>();
@@ -247,15 +251,19 @@ export function findTransferMatches(
     if (usedRows.has(c.index) || usedTx.has(c.counterpart.id)) continue;
     usedRows.add(c.index);
     usedTx.add(c.counterpart.id);
-    // A close runner-up for the same row means we are guessing.
-    const rivals = (perRow.get(c.index) ?? []).filter(
+    // A close runner-up for the same row or same counterpart transaction means we are guessing.
+    const rowRivals = (perRow.get(c.index) ?? []).filter(
       (o) =>
         o !== c &&
         !usedTx.has(o.counterpart.id) &&
         o.otherAccount !== c.otherAccount &&
         o.score >= c.score - 1,
     );
-    const sure = c.hinted && c.score >= 5 && !rivals.length;
+    const txRivals = (perTx.get(c.counterpart.id) ?? []).filter(
+      (o) => o !== c && !usedRows.has(o.index) && o.score >= c.score - 1,
+    );
+    const sure =
+      c.hinted && c.score >= 5 && !rowRivals.length && !txRivals.length;
     matches.push({
       index: c.index,
       kind: c.kind,

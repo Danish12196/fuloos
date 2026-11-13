@@ -116,7 +116,7 @@ export function validateBudget(
 /** Status thresholds shared by the budget page and reports. */
 export function budgetStatus(budget: number, actual: number): BudgetStatus {
   if (actual > budget) return "over";
-  if (budget > 0 && actual >= budget * NEAR_LIMIT_RATIO) return "near";
+  if (budget > 0 && actual * 5 >= budget * 4) return "near";
   return "under";
 }
 
@@ -143,14 +143,22 @@ export function budgetReport(
     const key = `${t.category_id ?? ""}|${t.date.slice(0, 7)}`;
     spentByKey.set(key, (spentByKey.get(key) ?? 0) + t.amount);
   }
+  const budgetsByCat = new Map<string, Budget[]>();
+  for (const b of budgets) {
+    const list = budgetsByCat.get(b.category_id);
+    if (list) list.push(b);
+    else budgetsByCat.set(b.category_id, [b]);
+  }
   const rows: BudgetProgress[] = [];
   let covered = 0;
   for (const category of ledger.categories) {
+    const catBudgets = budgetsByCat.get(category.id) ?? [];
+    if (!catBudgets.length) continue;
     let budget = 0;
     let actual = 0;
     let budgetedMonths = 0;
     for (const month of months) {
-      const b = budgetForMonth(budgets, category.id, month);
+      const b = catBudgets.find((item) => budgetCovers(item, month));
       if (!b) continue;
       budgetedMonths++;
       budget += b.amount;
@@ -190,19 +198,26 @@ export function unbudgetedCategories(
   ledger: Ledger,
   month: string,
 ): { category: Category; actual: number }[] {
-  const budgets = ledger.budgets ?? [];
+  const budgetedCats = new Set<string>();
+  for (const b of ledger.budgets ?? []) {
+    if (budgetCovers(b, month)) budgetedCats.add(b.category_id);
+  }
+  const spentByCat = new Map<string, number>();
+  for (const t of ledger.transactions) {
+    if (
+      t.type === "expense" &&
+      t.category_id &&
+      !budgetedCats.has(t.category_id) &&
+      t.date.slice(0, 7) === month
+    ) {
+      spentByCat.set(t.category_id, (spentByCat.get(t.category_id) ?? 0) + t.amount);
+    }
+  }
   return ledger.categories
-    .filter((c) => !budgetForMonth(budgets, c.id, month))
+    .filter((c) => !budgetedCats.has(c.id))
     .map((category) => ({
       category,
-      actual: ledger.transactions
-        .filter(
-          (t) =>
-            t.type === "expense" &&
-            t.category_id === category.id &&
-            t.date.slice(0, 7) === month,
-        )
-        .reduce((s, t) => s + t.amount, 0),
+      actual: spentByCat.get(category.id) ?? 0,
     }))
     .filter((r) => r.actual > 0)
     .sort((a, b) => b.actual - a.actual);

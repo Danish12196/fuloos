@@ -1,0 +1,680 @@
+/* Comfortable reading sizes and controls in both color schemes. */
+body {
+  line-height: 1.5;
+}
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+button {
+  line-height: 1.4;
+}
+.icon-button {
+  min-width: 32px;
+  min-height: 32px;
+}
+.page-heading p {
+  max-width: 570px;
+  line-height: 1.7;
+}
+.stat small {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.account-bottom {
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.account-bottom > span {
+  display: none;
+}
+.account-card h3 {
+  line-height: 1.5;
+}
+.category-legend > div {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.category-legend small {
+  width: 32px;
+}
+.donut {
+  width: 180px;
+  height: 180px;
+  padding: 24px;
+}
+.donut b {
+  font-size: 18px;
+}
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.theme-toggle:hover {
+  background: var(--hover-surface);
+}
+.auth-side {
+  position: relative;
+}
+.auth-theme-toggle {
+  position: absolute;
+  top: 25px;
+  right: 30px;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #101a15;
+  --surface: #19261f;
+  --topbar: #142019;
+  --soft-surface: #202f25;
+  --active-surface: #293c2c;
+  --hover-surface: #2a3d30;
+  --story-surface: #1b2d22;
+  --text: #e3ece0;
+  --text-soft: #becdb6;
+  --brand: #c1d7ad;
+  --link: #b0ca9a;
+  --placeholder: #8c9e87;
+  --muted: #a2b09a;
+  --line: #314136;
+}
+[data-theme="dark"] .brand-icon,
+[data-theme="dark"] .auth-story .brand-icon,
+[data-theme="dark"] .avatar,
+[data-theme="dark"] .small-avatar,
+[data-theme="dark"] .add-account-card > span {
+  color: #c2d8b2;
+  background: #2c4231;
+}
+[data-theme="dark"] .brand-dot {
+  color: #b1c78f;
+}
+[data-theme="dark"] .workspace-label,
+[data-theme="dark"] .eyebrow,
+[data-theme="dark"] .auth-story .eyebrow,
+[data-theme="dark"] .auth-story > small,
+[data-theme="dark"] .auth-tag,
+[data-theme="dark"] .auth-features,
+[data-theme="dark"] .auth-story p {
+  color: #a9bc9a;
+}
+[data-theme="dark"] .auth-story em {
+  color: #a3bf87;
+}
+[data-theme="dark"] .nav-dot {
+  background: #a3bf87;
+}
+[data-theme="dark"] .nav-item:hover,
+[data-theme="dark"] .icon-button:hover {
+  color: #d2e0c5;
+  background: var(--hover-surface);
+}
+[data-theme="dark"] .icon-button,
+[data-theme="dark"] .tiny-leaf {
+  color: #adc19d;
+}
+[data-theme="dark"] .primary {
+  background: #386b4e;
+  color: #f6faf2;
+}
+[data-theme="dark"] .primary:hover {
+  background: #447e5a;
+}
+[data-theme="dark"] .stat.net {
+  background: #28583f;
+  border-color: #41694c;
+}
+[data-theme="dark"] .green-text {
+  color: #b0d3a3 !important;
+}
+[data-theme="dark"] .green {
+  background: #29432d;
+  color: #b0d3a3;
+}
+[data-theme="dark"] .terracotta {
+  background: #43382a;
+  color: #ddb08e;
+}
+[data-theme="dark"] .account-card:hover {
+  border-color: #607853;
+}
+[data-theme="dark"] .account-symbol,
+[data-theme="dark"] .category-symbol,
+[data-theme="dark"] .transaction-icon {
+  filter: brightness(1.65) saturate(0.75);
+}
+[data-theme="dark"] .add-account-card {
+  border-color: #506448;
+  color: #b2c6a2;
+}
+[data-theme="dark"] .count {
+  color: #bfd4ac;
+}
+[data-theme="dark"] .text-button:hover,
+[data-theme="dark"] .transaction-main:hover .transaction-description b {
+  color: #d4e9bc;
+}
+[data-theme="dark"] .empty {
+  color: #a2b393;
+}
+[data-theme="dark"] .error {
+  color: #efb1a5;
+  background: #422c28;
+}
+[data-theme="dark"] .notice {
+  color: #c0d5ad;
+}
+[data-theme="dark"] .transaction-icon.income {
+  background: #25442e;
+  color: #b0d3a3;
+}
+[data-theme="dark"] .transaction-icon.transfer {
+  background: #2a3445;
+  color: #b3c0db;
+}
+@media (max-width: 1100px) {
+  .overview-bottom {
+    grid-template-columns: 1fr;
+  }
+  .stats {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stat.net {
+    grid-column: 1 / -1;
+  }
+  .currency-pill span {
+    display: none;
+  }
+}
+@media (max-width: 850px) and (min-width: 651px) {
+  .nav-item {
+    font-size: 0;
+  }
+}
+@media (max-width: 650px) {
+  .topbar {
+    padding: 0 16px;
+    font-size: 12px;
+  }
+  .topbar-right {
+    gap: 9px;
+  }
+  .currency-pill {
+    display: none;
+  }
+  .theme-toggle {
+    min-width: 38px;
+    padding: 8px;
+  }
+  .theme-toggle span {
+    display: none;
+  }
+  .small-avatar {
+    width: 29px;
+    height: 29px;
+  }
+  .page-heading p {
+    max-width: 265px;
+    font-size: 14px;
+  }
+  .page-heading > .primary {
+    font-size: 0;
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+  }
+  .nav-item {
+    font-size: 11px;
+    padding: 7px 8px;
+  }
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+  .full {
+    grid-template-columns: 1fr;
+  }
+  .account-card {
+    padding: 19px;
+  }
+  .account-card h3 {
+    font-size: 15px;
+  }
+  .account-bottom strong {
+    font-size: 20px;
+  }
+  .account-kind {
+    font-size: 12px;
+  }
+  .section-title .text-button {
+    font-size: 12px;
+  }
+  .stat h2 {
+    font-size: clamp(18px, 5vw, 25px);
+    letter-spacing: -0.8px;
+  }
+  .stat.net h2 {
+    font-size: 34px;
+  }
+  .stat small {
+    font-size: 12px;
+  }
+  .stat small span {
+    display: none;
+  }
+  .transaction-main {
+    gap: 9px;
+  }
+  .transaction-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .transaction-description b {
+    font-size: 14px;
+  }
+  .transaction-description small {
+    font-size: 12px;
+  }
+  .transaction-value b {
+    font-size: 13px;
+  }
+  .transaction-value small {
+    font-size: 12px;
+  }
+  .transaction-list {
+    padding: 0 15px 7px;
+  }
+  .transaction-value {
+    max-width: 43%;
+  }
+  .demo-banner {
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .demo-banner button {
+    font-size: 12px;
+  }
+  .category-item p {
+    font-size: 12px;
+  }
+  .auth-theme-toggle {
+    top: 18px;
+    right: 20px;
+  }
+  .auth-side {
+    padding-top: 77px;
+  }
+  .auth-story h1 {
+    font-size: 46px;
+  }
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+
+/* Categories are one shared collection for income and expenses. */
+.category-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.google-sign-in {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 46px;
+  margin-top: 24px;
+  padding: 12px 16px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 15px;
+  font-weight: 550;
+  color: inherit;
+}
+.google-sign-in:hover:not(:disabled) {
+  background: var(--surface-soft, #edf3ea);
+}
+.google-sign-in:disabled {
+  cursor: not-allowed;
+}
+.google-setup-note {
+  font-size: 12px !important;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 10px 0 0;
+}
+
+.csv-modal {
+  width: min(1000px, calc(100vw - 24px));
+  max-width: 1000px;
+}
+.csv-body {
+  padding: 0 28px 20px;
+}
+.csv-body fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.csv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+.csv-grid label,
+.csv-body fieldset > label:not(.csv-check) {
+  display: grid;
+  gap: 8px;
+}
+.modal label.csv-check {
+  flex-direction: row;
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.csv-check input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+.csv-check input,
+.csv-table input {
+  width: auto;
+  margin: 0;
+}
+.csv-table {
+  max-height: 350px;
+  overflow: auto;
+  margin-top: 16px;
+}
+.csv-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.csv-table th,
+.csv-table td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--border, #8884);
+}
+.csv-table td:last-child {
+  min-width: 160px;
+}
+@media (max-width: 600px) {
+  .csv-body {
+    padding: 0 16px 16px;
+  }
+  .csv-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Shared appearance controls and CSV actions. */
+.appearance-picker {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+.color-swatches {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.color-swatches button {
+  width: 30px;
+  height: 30px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+.color-swatches button[aria-pressed="true"] {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+.custom-color {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.custom-color input {
+  width: 56px;
+  height: 38px;
+  padding: 3px;
+}
+.csv-body input[type="file"]::file-selector-button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 16px;
+  margin-right: 12px;
+  background: var(--soft-surface);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.missing-categories {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 18px 0;
+}
+.missing-categories > div {
+  margin: 12px 0;
+}
+.transfer-matches {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 18px 0;
+}
+.transfer-matches h3 {
+  margin-top: 0;
+}
+.transfer-match-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  max-height: 320px;
+  overflow: auto;
+}
+.transfer-match-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.transfer-match-list li > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.transfer-match-list .csv-category-actions {
+  margin: 0;
+}
+.csv-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+.csv-table select {
+  min-width: 160px;
+}
+
+.csv-category-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.import-progress {
+  margin: 18px 0;
+}
+.import-progress-label {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.import-progress progress {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--active-surface);
+  accent-color: var(--green);
+}
+.import-progress progress::-webkit-progress-bar {
+  background: var(--active-surface);
+  border-radius: 999px;
+}
+.import-progress progress::-webkit-progress-value {
+  background: var(--green);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+.import-progress progress::-moz-progress-bar {
+  background: var(--green);
+  border-radius: 999px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .import-progress progress::-webkit-progress-value {
+    transition: none;
+  }
+}
+
+.csv-modal[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.csv-modal .modal-head,
+.csv-modal .modal-actions {
+  flex-shrink: 0;
+}
+.csv-modal .csv-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+.csv-modal .modal-actions {
+  flex-wrap: wrap;
+}
+.csv-modal .modal-actions > .import-progress {
+  flex-basis: 100%;
+  margin: 0 0 6px;
+}
+
+.bulk-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.selection-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.selection-label input[type="checkbox"],
+.transaction-select {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  accent-color: var(--green);
+}
+.transaction-select {
+  margin: 0 12px 0 16px;
+}
+.transaction-row.is-selected {
+  background: var(--active-surface);
+}
+.bulk-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.bulk-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.bulk-keep {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand);
+  cursor: pointer;
+}
+.bulk-keep:hover {
+  text-decoration: underline;
+}
+.bulk-modal .import-progress {
+  margin-bottom: 6px;
+}
+
+.csv-presets {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 18px 0;
+}
+.csv-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.csv-preset-row + .csv-preset-row {
+  margin-top: 12px;
+}
+.csv-preset-row > label {
+  flex: 1 1 220px;
+  margin-bottom: 0;
+}
+.csv-preset-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 0;
+}
+.csv-preset-banner .csv-category-actions {
+  margin: 0;
+}
+.csv-presets > p[role="status"]:not(.notice),
+.csv-presets > p.csv-preset-scope {
+  margin-top: 10px;
+}
+

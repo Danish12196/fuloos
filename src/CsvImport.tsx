@@ -1,12 +1,12 @@
 import { ImportProgress } from "./ImportProgress";
 import { confirmDialog } from "./dialogStore";
-import { ColorPicker, EmojiField } from "./Appearance";
 import type { Category } from "./domain";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { money, type Ledger } from "./domain";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { validateTransaction, type Ledger } from "./domain";
 import {
   parseCsv,
   previewCsv,
+  transactionKey,
   type CsvOptions,
   type ImportTransaction,
 } from "./csv";
@@ -27,76 +27,9 @@ import {
   type MissingPresetColumn,
   type PresetStore,
 } from "./csvPresets";
-
-function PresetNameRow({
-  label,
-  initial,
-  placeholder,
-  submitLabel,
-  submitClass,
-  onSubmit,
-  onEdit,
-  children,
-}: {
-  label: string;
-  initial: string;
-  placeholder?: string;
-  submitLabel: (name: string) => string;
-  submitClass: string;
-  onSubmit: (name: string) => void;
-  onEdit: () => void;
-  children?: ReactNode;
-}) {
-  const [name, setName] = useState(initial);
-  useEffect(() => setName(initial), [initial]);
-  return (
-    <div className="csv-preset-row">
-      <label>
-        {label}
-        <input
-          placeholder={placeholder}
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            onEdit();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onSubmit(name);
-            }
-          }}
-        />
-      </label>
-      <button
-        type="button"
-        className={submitClass}
-        onClick={() => onSubmit(name)}
-      >
-        {submitLabel(name)}
-      </button>
-      {children}
-    </div>
-  );
-}
-
-function transferSummary(applied: TransferMatch[]): string {
-  const count = (kind: TransferMatch["kind"]) =>
-    applied.filter((m) => m.kind === kind).length;
-  const plural = (n: number, one: string, many: string) =>
-    `${n} ${n === 1 ? one : many}`;
-  const parts = [
-    count("named") &&
-      `${plural(count("named"), "row is imported as a new transfer", "rows are imported as new transfers")}`,
-    count("pair") &&
-      `${plural(count("pair"), "row completes a transfer", "rows complete transfers")} with an entry already in another account (that entry becomes the transfer, no new row)`,
-    count("recorded") &&
-      `${plural(count("recorded"), "row is already recorded as a transfer and skipped", "rows are already recorded as transfers and skipped")} as duplicates`,
-  ].filter(Boolean);
-  return parts.length
-    ? `${parts.join("; ")}.`
-    : "No rows are treated as transfers yet.";
-}
+import { CsvPresetBar } from "./CsvPresetBar";
+import { CsvReviewSection } from "./CsvReviewSection";
+import { CsvMissingCategories } from "./CsvMissingCategories";
 
 export function CsvImport({
   ledger,
@@ -222,12 +155,18 @@ export function CsvImport({
     ) ?? [];
   const data = useMemo(() => (header ? rows.slice(1) : rows), [rows, header]);
   // Rows the user set by hand in the table keep their choice; the rest are
+  const accountById = useMemo(
+    () => new Map(ledger.accounts.map((a) => [a.id, a])),
+    [ledger.accounts],
+  );
+  const basePreview = useMemo(
+    () => previewCsv(data, options, ledger),
+    [data, options, ledger],
+  );
   // checked against the ledger for the other side of a transfer.
   const { matches, matchRows } = useMemo(() => {
     const manual = options.transfers ?? {};
-    const base = previewCsv(data, options, ledger).filter(
-      (r) => !(r.index in manual),
-    );
+    const base = basePreview.filter((r) => !(r.index in manual));
     const matches = findTransferMatches(base, options.account, ledger);
     const wanted = new Set(matches.map((m) => m.index));
     return {
@@ -240,13 +179,19 @@ export function CsvImport({
         ),
       ),
     };
-  }, [data, options, ledger]);
+  }, [basePreview, options.transfers, options.account, ledger]);
   const applied = useMemo(
     () => appliedMatches(matches, decisions),
     [matches, decisions],
   );
-  const appliedByIndex = new Map(applied.map((m) => [m.index, m]));
-  const matchByIndex = new Map(matches.map((m) => [m.index, m]));
+  const appliedByIndex = useMemo(
+    () => new Map(applied.map((m) => [m.index, m])),
+    [applied],
+  );
+  const matchByIndex = useMemo(
+    () => new Map(matches.map((m) => [m.index, m])),
+    [matches],
+  );
   const transfers = useMemo<Record<number, string>>(
     () => ({
       ...Object.fromEntries(applied.map((m) => [m.index, m.otherAccount])),
@@ -255,15 +200,49 @@ export function CsvImport({
     [applied, options.transfers],
   );
   const preview = useMemo(() => {
+    if (!applied.length) return basePreview;
     const recorded = new Set(
       applied.filter((m) => m.kind === "recorded").map((m) => m.index),
     );
-    return previewCsv(data, { ...options, transfers }, ledger).map((r) =>
-      recorded.has(r.index) ? { ...r, duplicate: true } : r,
-    );
-  }, [data, options, transfers, applied, ledger]);
-  const pendingMatches = matches.filter(
-    (m) => m.confidence === "likely" && !decisions.has(m.index),
+    const seen = new Set(ledger.transactions.map(transactionKey));
+    return basePreview.map((r) => {
+      const m = appliedByIndex.get(r.index);
+      let next = r;
+      if (m && r.transaction && r.transaction.type !== "transfer") {
+        const isCredit =
+          r.transaction.type === "income" && r.transaction.amount > 0;
+        const tx: ImportTransaction = {
+          ...r.transaction,
+          account_id: isCredit ? m.otherAccount : options.account,
+          to_account_id: isCredit ? options.account : m.otherAccount,
+          category_id: null,
+          type: "transfer",
+        };
+        try {
+          validateTransaction(tx, ledger);
+          next = { ...r, transaction: tx, error: "" };
+        } catch (e) {
+          return {
+            ...r,
+            transaction: null,
+            duplicate: false,
+            error: e instanceof Error ? e.message : "Invalid row.",
+          };
+        }
+      }
+      if (!next.transaction) return next;
+      const key = transactionKey(next.transaction);
+      const duplicate = recorded.has(r.index) || seen.has(key);
+      seen.add(key);
+      return duplicate === next.duplicate ? next : { ...next, duplicate };
+    });
+  }, [basePreview, applied, appliedByIndex, options.account, ledger]);
+  const pendingMatches = useMemo(
+    () =>
+      matches.filter(
+        (m) => m.confidence === "likely" && !decisions.has(m.index),
+      ),
+    [matches, decisions],
   );
   function decide(indexes: number[], decision: TransferDecision) {
     setDecisions((prev) => {
@@ -278,7 +257,7 @@ export function CsvImport({
     setDecisions(new Map());
   }
   const accountName = (id: string) =>
-    ledger.accounts.find((a) => a.id === id)?.name ?? "another account";
+    accountById.get(id)?.name ?? "another account";
   /** "to Liv Bank" for money leaving the import account, "from …" otherwise. */
   function direction(m: TransferMatch) {
     const out =
@@ -447,23 +426,25 @@ export function CsvImport({
     }
   }
 
-  const missingByName = new Map<string, string>();
-  const existingNames = new Set(
-    ledger.categories.map((c) => c.name.toLowerCase()),
-  );
-  data.forEach((row, index) => {
-    const name = (row[options.category] ?? "").trim();
-    const key = name.toLowerCase();
-    if (
-      name &&
-      !transfers[index] &&
-      !existingNames.has(key) &&
-      !missingByName.has(key)
-    ) {
-      missingByName.set(key, name);
-    }
-  });
-  const missingCategories = [...missingByName.values()];
+  const missingCategories = useMemo(() => {
+    const missingByName = new Map<string, string>();
+    const existingNames = new Set(
+      ledger.categories.map((c) => c.name.toLowerCase()),
+    );
+    data.forEach((row, index) => {
+      const name = (row[options.category] ?? "").trim();
+      const key = name.toLowerCase();
+      if (
+        name &&
+        !transfers[index] &&
+        !existingNames.has(key) &&
+        !missingByName.has(key)
+      ) {
+        missingByName.set(key, name);
+      }
+    });
+    return [...missingByName.values()];
+  }, [data, options.category, transfers, ledger.categories]);
   async function createAllCategories() {
     if (busy) return;
     const names = [...missingCategories];
@@ -671,158 +652,41 @@ export function CsvImport({
           it.
         </p>
         <fieldset disabled={busy || done || reading}>
-          <div className="csv-presets">
-            <fieldset disabled={presetBusy || !presetsReady}>
-              {suggestedPreset && (
-                <div role="status" className="notice csv-preset-banner">
-                  <span>
-                    Matching preset found: <b>{suggestedPreset.name}</b>
-                  </span>
-                  <div className="csv-category-actions">
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => {
-                        applyPreset(suggestedPreset, text);
-                        setSuggestionDismissed(true);
-                      }}
-                    >
-                      Apply
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => setSuggestionDismissed(true)}
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              )}
-              <div className="csv-preset-row">
-                <label>
-                  Mapping preset
-                  <select
-                    value={activePreset?.name ?? ""}
-                    onChange={(e) => selectPreset(e.target.value)}
-                  >
-                    <option value="">
-                      {presetsState === "loading"
-                        ? "Loading presets…"
-                        : "No preset"}
-                    </option>
-                    {presets.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {activePreset && !renaming && (
-                  <>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => {
-                        setRenaming(true);
-                        setPresetError("");
-                        setPresetStatus("");
-                      }}
-                    >
-                      Rename
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={handleDeletePreset}
-                    >
-                      Delete
-                    </button>
-                  </>
-                )}
-              </div>
-              {activePreset && renaming && (
-                <PresetNameRow
-                  label="New preset name"
-                  initial={activePreset.name}
-                  submitLabel={() => "Save name"}
-                  submitClass="primary"
-                  onSubmit={handleRenamePreset}
-                  onEdit={() => {
-                    if (presetError) setPresetError("");
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => {
-                      setRenaming(false);
-                      setPresetError("");
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </PresetNameRow>
-              )}
-              {canSavePreset && (
-                <PresetNameRow
-                  label="Preset name"
-                  initial={activePresetName}
-                  placeholder="e.g. Emirates NBD"
-                  submitLabel={(name) => {
-                    const match = name.trim()
-                      ? presets.find(
-                          (p) => presetKey(p.name) === presetKey(name),
-                        )
-                      : undefined;
-                    return match ? `Replace "${match.name}"` : "Save preset";
-                  }}
-                  submitClass="secondary"
-                  onSubmit={handleSavePreset}
-                  onEdit={() => {
-                    if (presetError) setPresetError("");
-                  }}
-                />
-              )}
-            </fieldset>
-            {presetsReady && (
-              <p className="muted small csv-preset-scope">
-                {presetScope === "account"
-                  ? "Presets are saved to your account and available on every device."
-                  : "Presets are saved in this browser only."}
-              </p>
-            )}
-            {presetError && (
-              <p role="alert" className="error">
-                {presetError}
-              </p>
-            )}
-            {presetsState === "failed" && (
-              <button
-                type="button"
-                className="secondary"
-                onClick={loadPresetList}
-              >
-                Retry loading presets
-              </button>
-            )}
-            {presetStatus && (
-              <p role="status" className="muted small">
-                {presetStatus}
-              </p>
-            )}
-            {activeMissing.length > 0 && missingNotice && (
-              <p role="alert" className="notice">
-                Preset &ldquo;{missingNotice.presetName}&rdquo; could not match{" "}
-                {activeMissing
-                  .map((m) => `"${m.savedName}" (${m.label})`)
-                  .join(", ")}
-                . Choose {activeMissing.length === 1 ? "a column" : "columns"}{" "}
-                below; required columns must be mapped to import, and optional
-                ones stay blank if left unmapped.
-              </p>
-            )}
-          </div>
+          <CsvPresetBar
+            presets={presets}
+            presetsState={presetsState}
+            presetBusy={presetBusy}
+            presetScope={presetScope}
+            activePreset={activePreset}
+            activePresetName={activePresetName}
+            suggestedPreset={suggestedPreset}
+            canSavePreset={canSavePreset}
+            renaming={renaming}
+            presetError={presetError}
+            presetStatus={presetStatus}
+            activeMissing={activeMissing}
+            missingNotice={missingNotice}
+            onApplySuggested={(preset) => {
+              applyPreset(preset, text);
+              setSuggestionDismissed(true);
+            }}
+            onDismissSuggested={() => setSuggestionDismissed(true)}
+            onSelectPreset={selectPreset}
+            onStartRename={() => {
+              setRenaming(true);
+              setPresetError("");
+              setPresetStatus("");
+            }}
+            onCancelRename={() => {
+              setRenaming(false);
+              setPresetError("");
+            }}
+            onRenamePreset={handleRenamePreset}
+            onDeletePreset={handleDeletePreset}
+            onSavePreset={handleSavePreset}
+            onClearPresetError={() => setPresetError("")}
+            onRetryLoad={loadPresetList}
+          />
           <label>
             CSV file
             <input
@@ -958,95 +822,29 @@ export function CsvImport({
             uncategorized.
           </p>
         </fieldset>
-        {!!missingCategories.length && !done && (
-          <section className="missing-categories">
-            <h3>Missing categories</h3>
-            <p className="muted">
-              {missingCategories.length} missing categories. Create them all
-              with random colors and blank descriptions and emojis, or configure
-              each one yourself.
-            </p>
-            <div className="csv-category-actions">
-              <button
-                className="primary"
-                disabled={busy || reading}
-                onClick={() => void createAllCategories()}
-              >
-                Create all missing categories
-              </button>
-              <button
-                className="secondary"
-                disabled={busy || reading}
-                aria-expanded={manualCategories}
-                onClick={() => setManualCategories((value) => !value)}
-              >
-                {manualCategories
-                  ? "Hide individual configuration"
-                  : "Configure individually"}
-              </button>
-            </div>
-            {manualCategories &&
-              missingCategories.map((name) => (
-                <div key={name}>
-                  <button
-                    className="secondary"
-                    disabled={busy || reading}
-                    onClick={() => setCreating(name)}
-                  >
-                    Create {name}
-                  </button>
-                  {creating === name && (
-                    <form
-                      onSubmit={async (e) => {
-                        e.preventDefault();
-                        const f = new FormData(e.currentTarget);
-                        setBusy(true);
-                        setError("");
-                        try {
-                          await onCreateCategory({
-                            name,
-                            description: String(f.get("description") ?? ""),
-                            color: String(f.get("color")),
-                            emoji: String(f.get("emoji") ?? ""),
-                          });
-                          setCreating(null);
-                        } catch (e) {
-                          setError((e as Error).message);
-                        } finally {
-                          setBusy(false);
-                        }
-                      }}
-                    >
-                      <fieldset disabled={busy}>
-                        <p>{name}</p>
-                        {name.length > 80 && (
-                          <p role="alert">
-                            Correct this category name in the CSV: maximum 80
-                            characters.
-                          </p>
-                        )}
-                        <label>
-                          Description (optional)
-                          <input name="description" maxLength={500} />
-                        </label>
-                        <EmojiField />
-                        <ColorPicker />
-                        <button className="primary" disabled={name.length > 80}>
-                          Confirm creation
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          onClick={() => setCreating(null)}
-                        >
-                          Cancel
-                        </button>
-                      </fieldset>
-                    </form>
-                  )}
-                </div>
-              ))}
-          </section>
+        {!done && (
+          <CsvMissingCategories
+            missingCategories={missingCategories}
+            busy={busy}
+            reading={reading}
+            manualCategories={manualCategories}
+            creating={creating}
+            onToggleManual={() => setManualCategories((value) => !value)}
+            onSetCreating={setCreating}
+            onCreateAll={() => void createAllCategories()}
+            onCreateOne={async (value) => {
+              setBusy(true);
+              setError("");
+              try {
+                await onCreateCategory(value);
+                setCreating(null);
+              } catch (e) {
+                setError((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
         )}
         {categoryProgress && <p role="status">{categoryProgress}</p>}
         {(parseError || error) && (
@@ -1054,275 +852,43 @@ export function CsvImport({
             {parseError || error}
           </p>
         )}
-        {matches.length > 0 && !parseError && !done && (
-          <section className="transfer-matches" aria-labelledby="tm-title">
-            <h3 id="tm-title">Transfers between your accounts</h3>
-            <p className="muted">
-              {transferSummary(applied)} Change any row with its type menu in
-              the table.
-            </p>
-            {pendingMatches.length > 0 && (
-              <>
-                <p>
-                  {pendingMatches.length === 1
-                    ? "One more row looks like a transfer."
-                    : `${pendingMatches.length} more rows look like transfers.`}{" "}
-                  Confirm the ones that are:
-                </p>
-                <ul className="transfer-match-list">
-                  {pendingMatches.map((m) => {
-                    const t = matchRows.get(m.index);
-                    return (
-                      <li key={m.index}>
-                        <div>
-                          <b>
-                            {t?.date} ·{" "}
-                            {t
-                              ? money(
-                                  t.amount * (t.type === "expense" ? -1 : 1),
-                                )
-                              : ""}{" "}
-                            · {t?.payee || "No payee"}
-                          </b>
-                          <span className="muted small">
-                            {matchLabel(m)} ({m.reasons.join(", ")})
-                          </span>
-                        </div>
-                        <div className="csv-category-actions">
-                          <button
-                            type="button"
-                            className="primary"
-                            disabled={busy}
-                            onClick={() => decide([m.index], "accept")}
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary"
-                            disabled={busy}
-                            onClick={() => decide([m.index], "reject")}
-                          >
-                            Not a transfer
-                          </button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {pendingMatches.length > 1 && (
-                  <div className="csv-category-actions">
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={busy}
-                      onClick={() =>
-                        decide(
-                          pendingMatches.map((m) => m.index),
-                          "accept",
-                        )
-                      }
-                    >
-                      Confirm all {pendingMatches.length}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        decide(
-                          pendingMatches.map((m) => m.index),
-                          "reject",
-                        )
-                      }
-                    >
-                      None are transfers
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-        )}
-        {!!preview.length && !parseError && (
-          <>
-            <h3>Review transactions</h3>
-            <p>
-              {selected.length} selected ·{" "}
-              {preview.filter((r) => r.error).length} invalid ·{" "}
-              {preview.filter((r) => r.duplicate).length} possible duplicates
-            </p>
-            <label className="csv-check">
-              <input
-                type="checkbox"
-                disabled={busy || done}
-                checked={includeDuplicates}
-                onChange={(e) => setIncludeDuplicates(e.target.checked)}
-              />
-              Include possible duplicates (same account, date, amount and payee)
-            </label>
-            <label>
-              Show rows
-              <select
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-              >
-                <option value="all">All rows ({preview.length})</option>
-                <option value="invalid">
-                  Invalid fields ({preview.filter((r) => r.error).length})
-                </option>
-                <option value="duplicates">
-                  Possible duplicates (
-                  {preview.filter((r) => r.duplicate).length})
-                </option>
-                <option value="selected">Selected ({selected.length})</option>
-                {matches.length > 0 && (
-                  <option value="transfers">
-                    Transfers found ({matches.length})
-                  </option>
-                )}
-              </select>
-            </label>
-            <div className="csv-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Include</th>
-                    <th>Row</th>
-                    <th>Date</th>
-                    <th>Payee</th>
-                    <th>Amount</th>
-                    <th>Type / transfer account</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((r) => (
-                    <tr key={r.index}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          aria-label={`Include row ${r.index + 1}`}
-                          disabled={
-                            busy ||
-                            done ||
-                            !r.transaction ||
-                            (r.duplicate && !includeDuplicates)
-                          }
-                          checked={
-                            !!r.transaction &&
-                            !excluded.has(r.index) &&
-                            (!r.duplicate || includeDuplicates)
-                          }
-                          onChange={(e) =>
-                            setExcluded((prev) => {
-                              const next = new Set(prev);
-                              if (e.target.checked) next.delete(r.index);
-                              else next.add(r.index);
-                              return next;
-                            })
-                          }
-                        />
-                      </td>
-                      <td>{r.index + skip + (header ? 2 : 1)}</td>
-                      <td>
-                        {r.transaction?.date ??
-                          data[r.index]?.[options.date] ??
-                          "—"}
-                      </td>
-                      <td>
-                        {r.transaction?.payee ||
-                          data[r.index]?.[options.payee] ||
-                          "—"}
-                      </td>
-                      <td>
-                        {r.transaction
-                          ? money(
-                              r.transaction.amount *
-                                (r.transaction.type === "expense" ? -1 : 1),
-                            )
-                          : "—"}
-                      </td>
-                      <td>
-                        <select
-                          aria-label={`Transfer account for row ${r.index + skip + (header ? 2 : 1)}`}
-                          disabled={busy || done}
-                          value={transfers[r.index] ?? ""}
-                          onChange={(e) =>
-                            change("transfers", {
-                              ...options.transfers,
-                              [r.index]: e.target.value,
-                            })
-                          }
-                        >
-                          <option value="">Income / expense</option>
-                          {ledger.accounts
-                            .filter((a) => a.id !== options.account)
-                            .map((a) => (
-                              <option key={a.id} value={a.id}>
-                                Transfer · {a.name}
-                              </option>
-                            ))}
-                        </select>
-                        {r.transaction?.type === "transfer" && (
-                          <small>
-                            {
-                              ledger.accounts.find(
-                                (a) => a.id === r.transaction?.account_id,
-                              )?.name
-                            }{" "}
-                            →{" "}
-                            {
-                              ledger.accounts.find(
-                                (a) => a.id === r.transaction?.to_account_id,
-                              )?.name
-                            }
-                          </small>
-                        )}
-                      </td>
-                      <td>
-                        {r.error ||
-                          (appliedByIndex.has(r.index) ? (
-                            <>
-                              {matchLabel(appliedByIndex.get(r.index)!)}{" "}
-                              <button
-                                type="button"
-                                className="text-button"
-                                disabled={busy || done}
-                                onClick={() => decide([r.index], "reject")}
-                              >
-                                Not a transfer
-                              </button>
-                            </>
-                          ) : matchByIndex.has(r.index) ? (
-                            <>
-                              Possible{" "}
-                              {matchLabel(matchByIndex.get(r.index)!).replace(
-                                /^Transfer|^Already/,
-                                (w) => w.toLowerCase(),
-                              )}{" "}
-                              <button
-                                type="button"
-                                className="text-button"
-                                disabled={busy || done}
-                                onClick={() => decide([r.index], "accept")}
-                              >
-                                Confirm
-                              </button>
-                            </>
-                          ) : r.duplicate ? (
-                            "Possible duplicate"
-                          ) : (
-                            "Ready"
-                          ))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
+        <CsvReviewSection
+          ledger={ledger}
+          data={data}
+          options={options}
+          skip={skip}
+          header={header}
+          busy={busy}
+          done={done}
+          parseError={parseError}
+          preview={preview}
+          visible={visible}
+          selected={selected}
+          filter={filter}
+          includeDuplicates={includeDuplicates}
+          excluded={excluded}
+          matches={matches}
+          matchRows={matchRows}
+          pendingMatches={pendingMatches}
+          applied={applied}
+          appliedByIndex={appliedByIndex}
+          matchByIndex={matchByIndex}
+          transfers={transfers}
+          accountById={accountById}
+          matchLabel={matchLabel}
+          onDecide={decide}
+          onSetFilter={setFilter}
+          onSetIncludeDuplicates={setIncludeDuplicates}
+          onToggleExcluded={(index, checked) =>
+            setExcluded((prev) => {
+              const next = new Set(prev);
+              if (checked) next.delete(index);
+              else next.add(index);
+              return next;
+            })
+          }
+          onChangeTransfers={(next) => change("transfers", next)}
+        />
         {done && (
           <p role="status">Imported {progress} transactions successfully.</p>
         )}
