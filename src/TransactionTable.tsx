@@ -10,7 +10,8 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import type { Ledger, Transaction } from "./domain";
+import { today, type Ledger, type Transaction } from "./domain";
+import { downloadBlob, transactionsToCsv } from "./export";
 import {
   buildRegister,
   entryCategory,
@@ -406,6 +407,26 @@ export function TransactionsPanel({
           onClick={onImportSms}
         >
           Import SMS
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || loading || !visibleIds.length}
+          onClick={() => {
+            const seen = new Set<string>();
+            const filtered = rows.flatMap((r) => {
+              if (seen.has(r.tx.id)) return [];
+              seen.add(r.tx.id);
+              return [r.tx];
+            });
+            downloadBlob(
+              transactionsToCsv(filtered, ledger),
+              `fuloos-transactions-${today()}.csv`,
+              "text/csv;charset=utf-8",
+            );
+          }}
+        >
+          Export CSV
         </button>
         <label className="search">
           <Search size={17} />

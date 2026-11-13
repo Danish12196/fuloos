@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { ArrowRight, Check, Leaf } from "lucide-react";
+import { BackendError, MfaRequiredError } from "./backend";
 import { backend } from "./client";
 import { errorMessage } from "./domain";
 import { ThemeToggle } from "./ThemeToggle";
@@ -17,6 +18,18 @@ export function Auth({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const [mfa, setMfa] = useState<{
+    mfaId: string;
+    otpId: string;
+    email: string;
+  } | null>(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [resetMode, setResetMode] = useState<"none" | "request" | "confirm">(
+    "none",
+  );
+  const [resetToken, setResetToken] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
   const [googleAvailable, setGoogleAvailable] = useState<boolean | null>(null);
   useEffect(() => {
     let active = true;
@@ -41,8 +54,115 @@ export function Auth({
     setBusy(true);
     backend
       .signInWithGoogle()
-      .catch((e) => setError(errorMessage(e)))
+      .catch(async (e) => {
+        if (e instanceof MfaRequiredError) {
+          setError(
+            "Multi-factor authentication is required for this account. Please sign in with email and password.",
+          );
+          return;
+        }
+        setError(errorMessage(e));
+      })
       .finally(() => setBusy(false));
+  }
+  async function startMfaOtp(mfaId: string, targetEmail: string) {
+    if (!backend) return;
+    try {
+      const { otpId } = await backend.requestOtp(targetEmail);
+      setMfa({ mfaId, otpId, email: targetEmail });
+      setOtpCode("");
+      setNotice(`We sent a verification code to ${targetEmail.trim()}.`);
+    } catch (e) {
+      setMfa({ mfaId, otpId: "", email: targetEmail });
+      setError(
+        errorMessage(e) ||
+          "Could not send the email verification code. Try resending or contact support.",
+      );
+    }
+  }
+  async function submitMfa(e: React.FormEvent) {
+    e.preventDefault();
+    if (!backend || !mfa) return;
+    setError("");
+    setNotice("");
+    if (!mfa.otpId) {
+      setError("Request a verification code first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await backend.verifyMfaOtp(mfa.mfaId, mfa.otpId, otpCode);
+    } catch (err) {
+      if (err instanceof BackendError && err.status === 401) {
+        setMfa(null);
+        setOtpCode("");
+        setError("Your sign-in session expired. Please sign in again.");
+      } else {
+        setError(errorMessage(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resendOtp() {
+    if (!backend || !mfa || busy) return;
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      const { otpId } = await backend.requestOtp(mfa.email);
+      setMfa({ ...mfa, otpId });
+      setNotice(`Sent a new verification code to ${mfa.email.trim()}.`);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function submitResetRequest(e: React.FormEvent) {
+    e.preventDefault();
+    if (!backend) return;
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      await backend.requestPasswordReset(email);
+      setNotice(
+        "If an account exists for that email, a password reset link and token have been sent.",
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function submitResetConfirm(e: React.FormEvent) {
+    e.preventDefault();
+    if (!backend) return;
+    setError("");
+    setNotice("");
+    if (resetPassword !== resetPasswordConfirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await backend.confirmPasswordReset(
+        resetToken,
+        resetPassword,
+        resetPasswordConfirm,
+      );
+      setResetMode("none");
+      setResetToken("");
+      setResetPassword("");
+      setResetPasswordConfirm("");
+      setPassword("");
+      setNotice("Your password has been updated. Sign in with your new password.");
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   }
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -66,7 +186,11 @@ export function Auth({
         }
       } else await backend.signIn(email, password);
     } catch (e) {
-      setError(errorMessage(e));
+      if (e instanceof MfaRequiredError) {
+        await startMfaOtp(e.mfaId, email);
+      } else {
+        setError(errorMessage(e));
+      }
     } finally {
       setBusy(false);
     }
@@ -158,67 +282,270 @@ export function Auth({
               below.
             </p>
           )}
-          <div className="auth-tabs">
-            <button
-              className={!signup ? "selected" : ""}
-              onClick={() => {
-                setSignup(false);
-                setError("");
-                setNotice("");
-              }}
-            >
-              Sign in
-            </button>
-            <button
-              className={signup ? "selected" : ""}
-              onClick={() => {
-                setSignup(true);
-                setError("");
-                setNotice("");
-              }}
-            >
-              Sign up
-            </button>
-          </div>
-          <form onSubmit={submit}>
-            <label>
-              Email address
-              <input
-                required
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-              />
-            </label>
-            <label>
-              Password
-              <input
-                required
-                type="password"
-                minLength={8}
-                autoComplete={signup ? "new-password" : "current-password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={signup ? "At least 8 characters" : "Your password"}
-              />
-            </label>
-            {(error || externalError) && (
-              <div className="error" role="alert">
-                {error || externalError}
+          {mfa ? (
+            <form onSubmit={submitMfa} className="auth-mfa-form">
+              <p className="muted small">
+                Two-factor verification is enabled for <b>{mfa.email}</b>. Enter
+                the one-time code sent to your email.
+              </p>
+              <label>
+                Verification code
+                <input
+                  required
+                  autoFocus
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  placeholder="Enter code from email"
+                />
+              </label>
+              {(error || externalError) && (
+                <div className="error" role="alert">
+                  {error || externalError}
+                </div>
+              )}
+              {notice && (
+                <div className="notice" role="status">
+                  {notice}
+                </div>
+              )}
+              <button className="primary auth-submit" disabled={busy}>
+                {busy ? "Verifying…" : "Verify and sign in"}
+                <ArrowRight size={17} />
+              </button>
+              <div className="auth-aux-actions">
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy}
+                  onClick={resendOtp}
+                >
+                  Resend code
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => {
+                    setMfa(null);
+                    setOtpCode("");
+                    setError("");
+                    setNotice("");
+                  }}
+                >
+                  Back to sign in
+                </button>
               </div>
-            )}
-            {notice && (
-              <div className="notice" role="status">
-                {notice}
+            </form>
+          ) : resetMode !== "none" ? (
+            resetMode === "request" ? (
+              <form onSubmit={submitResetRequest}>
+                <p className="muted small">
+                  Enter your account email and we will send a password reset
+                  link and token.
+                </p>
+                <label>
+                  Email address
+                  <input
+                    required
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                  />
+                </label>
+                {(error || externalError) && (
+                  <div className="error" role="alert">
+                    {error || externalError}
+                  </div>
+                )}
+                {notice && (
+                  <div className="notice" role="status">
+                    {notice}
+                  </div>
+                )}
+                <button className="primary auth-submit" disabled={busy}>
+                  {busy ? "Sending…" : "Send reset email"}
+                  <ArrowRight size={17} />
+                </button>
+                <div className="auth-aux-actions">
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => {
+                      setResetMode("confirm");
+                      setError("");
+                      setNotice("");
+                    }}
+                  >
+                    I have a reset token
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => {
+                      setResetMode("none");
+                      setError("");
+                      setNotice("");
+                    }}
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={submitResetConfirm}>
+                <label>
+                  Reset token
+                  <input
+                    required
+                    autoComplete="off"
+                    value={resetToken}
+                    onChange={(e) => setResetToken(e.target.value)}
+                    placeholder="Paste token from email"
+                  />
+                </label>
+                <label>
+                  New password
+                  <input
+                    required
+                    type="password"
+                    minLength={8}
+                    autoComplete="new-password"
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                    placeholder="At least 8 characters"
+                  />
+                </label>
+                <label>
+                  Confirm new password
+                  <input
+                    required
+                    type="password"
+                    minLength={8}
+                    autoComplete="new-password"
+                    value={resetPasswordConfirm}
+                    onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                    placeholder="Repeat new password"
+                  />
+                </label>
+                {(error || externalError) && (
+                  <div className="error" role="alert">
+                    {error || externalError}
+                  </div>
+                )}
+                {notice && (
+                  <div className="notice" role="status">
+                    {notice}
+                  </div>
+                )}
+                <button className="primary auth-submit" disabled={busy}>
+                  {busy ? "Updating…" : "Update password"}
+                  <ArrowRight size={17} />
+                </button>
+                <div className="auth-aux-actions">
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => {
+                      setResetMode("none");
+                      setError("");
+                      setNotice("");
+                    }}
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              </form>
+            )
+          ) : (
+            <>
+              <div className="auth-tabs">
+                <button
+                  className={!signup ? "selected" : ""}
+                  onClick={() => {
+                    setSignup(false);
+                    setError("");
+                    setNotice("");
+                  }}
+                >
+                  Sign in
+                </button>
+                <button
+                  className={signup ? "selected" : ""}
+                  onClick={() => {
+                    setSignup(true);
+                    setError("");
+                    setNotice("");
+                  }}
+                >
+                  Sign up
+                </button>
               </div>
-            )}
-            <button className="primary auth-submit" disabled={busy}>
-              {busy ? "Please wait…" : signup ? "Create account" : "Sign in"}
-              <ArrowRight size={17} />
-            </button>
-          </form>
+              <form onSubmit={submit}>
+                <label>
+                  Email address
+                  <input
+                    required
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    required
+                    type="password"
+                    minLength={8}
+                    autoComplete={signup ? "new-password" : "current-password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={
+                      signup ? "At least 8 characters" : "Your password"
+                    }
+                  />
+                </label>
+                {(error || externalError) && (
+                  <div className="error" role="alert">
+                    {error || externalError}
+                  </div>
+                )}
+                {notice && (
+                  <div className="notice" role="status">
+                    {notice}
+                  </div>
+                )}
+                <button className="primary auth-submit" disabled={busy}>
+                  {busy ? "Please wait…" : signup ? "Create account" : "Sign in"}
+                  <ArrowRight size={17} />
+                </button>
+                {!signup && backend && (
+                  <div className="auth-aux-actions">
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={busy}
+                      onClick={() => {
+                        setResetMode("request");
+                        setError("");
+                        setNotice("");
+                      }}
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
+              </form>
+            </>
+          )}
           <div className="auth-divider">
             <span>or take a look around</span>
           </div>

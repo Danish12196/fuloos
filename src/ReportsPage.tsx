@@ -1,6 +1,8 @@
-import { Tags } from "lucide-react";
+import { Download, Tags } from "lucide-react";
+import { budgetReport } from "./budgets";
 import { BudgetReportPanel, monthLabel } from "./BudgetsView";
-import type { Ledger } from "./domain";
+import { today, type Ledger } from "./domain";
+import { downloadBlob, reportToCsv } from "./export";
 import type { SpendingItem } from "./OverviewPage";
 import { Empty } from "./TransactionList";
 
@@ -48,6 +50,26 @@ export function ReportsPage({
           <b>Income {concealed(summary.income)}</b>
           <b>Expenses {concealed(summary.expense)}</b>
           <b>Net cash flow {concealed(summary.income - summary.expense)}</b>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              const report = budgetReport(ledger, budgetRangeStart, month);
+              const csv = reportToCsv({
+                rangeLabel,
+                summary,
+                spending,
+                budgetReport: report,
+              });
+              downloadBlob(
+                csv,
+                `fuloos-report-${today()}.csv`,
+                "text/csv;charset=utf-8",
+              );
+            }}
+          >
+            <Download size={14} /> Export CSV
+          </button>
         </div>
         {spending.map((c) => (
           <div className="category-item" key={c.id}>

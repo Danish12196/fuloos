@@ -1,0 +1,134 @@
+.pwa-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.pwa-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pwa-banner > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pwa-banner button {
+  background: var(--brand);
+  color: #ffffff;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pwa-banner-offline {
+  background: color-mix(in srgb, var(--soft-surface) 78%, #d99b26 22%);
+  border: 1px solid color-mix(in srgb, var(--line) 65%, #d99b26 35%);
+  color: var(--text);
+}
+
+.pwa-banner-update {
+  background: var(--active-surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.pwa-banner-install {
+  background: var(--soft-surface);
+  border: 1px solid var(--line);
+  color: var(--text-soft);
+}
+
+.pwa-inline-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--soft-surface) 78%, #d99b26 22%);
+  color: var(--text);
+  margin-bottom: 14px;
+}
+
+.quick-add-modal {
+  max-width: 440px;
+}
+
+.quick-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-add-kinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.quick-add-kinds button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--soft-surface);
+  color: var(--text-soft);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.quick-add-kinds button.active {
+  background: var(--active-surface);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.quick-add-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.quick-add-fab {
+  display: none;
+}
+
+@media (max-width: 780px) {
+  .quick-add-fab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: 18px;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    border: 0;
+    background: var(--brand);
+    color: #ffffff;
+    box-shadow: 0 8px 24px rgba(16, 40, 31, 0.28);
+    z-index: 35;
+  }
+
+  .quick-add-fab:active {
+    transform: scale(0.96);
+  }
+}

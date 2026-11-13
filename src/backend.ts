@@ -1,10 +1,13 @@
 import PocketBase, { BaseAuthStore } from "pocketbase";
 import {
+  defaultNotificationPreferences,
   defaultRecurringPreferences,
   type Account,
   type Budget,
   type Category,
+  type DigestDay,
   type Ledger,
+  type NotificationPreferences,
   type RecurringOccurrenceRecord,
   type RecurringPreferences,
   type RecurringSchedule,
@@ -12,7 +15,12 @@ import {
 } from "./domain.ts";
 export interface Session {
   token: string;
-  user: { id: string; email: string };
+  user: {
+    id: string;
+    email: string;
+    verified?: boolean;
+    mfaEnabled?: boolean;
+  };
 }
 export type Table =
   | "accounts"
@@ -24,7 +32,9 @@ export type Table =
   | "csv_presets"
   | "budgets"
   | "ml_settings"
-  | "ml_examples";
+  | "ml_examples"
+  | "notification_prefs"
+  | "notification_log";
 export interface CsvPresetRecord {
   id: string;
   name: string;
@@ -32,6 +42,16 @@ export interface CsvPresetRecord {
   config: unknown;
 }
 type SavedRecurringPreferences = RecurringPreferences & { id: string };
+type SavedNotificationPreferences = NotificationPreferences & { id: string };
+export interface NotificationLogRecord {
+  id: string;
+  dedup_key: string;
+  channel: string;
+  event_type: string;
+  period_key: string;
+  subject?: string;
+  sent_at?: string;
+}
 type RecordTypes = {
   accounts: Account;
   categories: Category;
@@ -43,6 +63,8 @@ type RecordTypes = {
   budgets: Budget;
   ml_settings: MlSettingsRecord;
   ml_examples: MlExampleRecord;
+  notification_prefs: SavedNotificationPreferences;
+  notification_log: NotificationLogRecord;
 };
 /** AI suggestion settings and correction log (see src/ledger/learning.ts). */
 export interface MlSettingsRecord {
@@ -66,7 +88,15 @@ export interface MlExampleRecord {
   created?: string;
 }
 export const IMPORT_BATCH_SIZE = 100;
-type AuthResponse = { token: string; record: { id: string; email: string } };
+type AuthResponse = {
+  token: string;
+  record: {
+    id: string;
+    email: string;
+    verified?: boolean;
+    mfa_enabled?: boolean;
+  };
+};
 interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -90,6 +120,14 @@ export class BackendError extends Error {
   }
 }
 export class MissingCollectionError extends BackendError {}
+export class MfaRequiredError extends BackendError {
+  readonly mfaId: string;
+  constructor(mfaId: string, message = "Multi-factor authentication required.") {
+    super(message, 401);
+    this.name = "MfaRequiredError";
+    this.mfaId = mfaId;
+  }
+}
 const MAX_DISMISSED_KEYS = 400;
 
 function parseDismissedKeys(raw: unknown): string[] {
@@ -207,8 +245,19 @@ export class PocketBaseBackend {
       response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       if (
+        response.status === 401 &&
+        typeof data?.mfaId === "string" &&
+        data.mfaId
+      ) {
+        throw new MfaRequiredError(
+          data.mfaId,
+          data?.message || "Multi-factor authentication required.",
+        );
+      }
+      if (
         (response.status === 401 ||
           (response.status === 403 && path.endsWith("/auth-refresh"))) &&
+        token &&
         token === this.session?.token
       )
         this.publish(null);
@@ -216,7 +265,9 @@ export class PocketBaseBackend {
         throw new MissingCollectionError(
           path.startsWith("/api/collections/fuloos_recurring")
             ? "Recurring features aren't installed on the server yet. Apply the recurring PocketBase migrations to enable them."
-            : "Fuloos backend is not configured yet. Install the PocketBase migration before using live accounts.",
+            : path === "/api/fuloos/sign-out-everywhere"
+              ? "Sign out everywhere requires the PocketBase security hook (pocketbase/pb_hooks/fuloos_security.pb.js) on the server."
+              : "Fuloos backend is not configured yet. Install the PocketBase migration before using live accounts.",
           404,
         );
       if (
@@ -270,9 +321,19 @@ export class PocketBaseBackend {
     return data as T;
   }
   private accept(data: AuthResponse): Session {
+    const user: Session["user"] = {
+      id: data.record.id,
+      email: data.record.email,
+    };
+    if (typeof data.record.verified === "boolean") {
+      user.verified = data.record.verified;
+    }
+    if (typeof data.record.mfa_enabled === "boolean") {
+      user.mfaEnabled = data.record.mfa_enabled;
+    }
     const session = {
       token: data.token,
-      user: { id: data.record.id, email: data.record.email },
+      user,
     };
     this.publish(session);
     return session;
@@ -311,7 +372,18 @@ export class PocketBaseBackend {
       .then((data) =>
         this.accept({
           token: data.token,
-          record: { id: data.record.id, email: data.record.email },
+          record: {
+            id: data.record.id,
+            email: data.record.email,
+            verified:
+              typeof data.record.verified === "boolean"
+                ? data.record.verified
+                : undefined,
+            mfa_enabled:
+              typeof data.record.mfa_enabled === "boolean"
+                ? data.record.mfa_enabled
+                : undefined,
+          },
         }),
       );
   }
@@ -326,11 +398,152 @@ export class PocketBaseBackend {
         },
       );
     } catch (e) {
+      if (e instanceof MfaRequiredError) throw e;
       if (e instanceof BackendError && e.status === 400)
         throw new BackendError("Incorrect email or password.", 400, e.fields);
       throw e;
     }
     return this.accept(data);
+  }
+  async requestOtp(email: string): Promise<{ otpId: string }> {
+    const data = await this.request<{ otpId?: string }>(
+      "/api/collections/fuloos_users/request-otp",
+      {
+        method: "POST",
+        body: JSON.stringify({ email: email.trim() }),
+      },
+    );
+    if (!data?.otpId) {
+      throw new BackendError(
+        "Could not start email verification code. Check server OTP and SMTP settings.",
+        400,
+      );
+    }
+    return { otpId: data.otpId };
+  }
+  async verifyMfaOtp(
+    mfaId: string,
+    otpId: string,
+    code: string,
+  ): Promise<Session> {
+    let data: AuthResponse;
+    try {
+      data = await this.request<AuthResponse>(
+        "/api/collections/fuloos_users/auth-with-otp",
+        {
+          method: "POST",
+          body: JSON.stringify({ mfaId, otpId, password: code.trim() }),
+        },
+      );
+    } catch (e) {
+      if (e instanceof BackendError && e.status === 400) {
+        throw new BackendError(
+          "Invalid or expired verification code.",
+          400,
+          e.fields,
+        );
+      }
+      throw e;
+    }
+    return this.accept(data);
+  }
+  async requestPasswordReset(email: string): Promise<void> {
+    await this.request("/api/collections/fuloos_users/request-password-reset", {
+      method: "POST",
+      body: JSON.stringify({ email: email.trim() }),
+    });
+  }
+  async confirmPasswordReset(
+    token: string,
+    password: string,
+    passwordConfirm: string,
+  ): Promise<void> {
+    await this.request("/api/collections/fuloos_users/confirm-password-reset", {
+      method: "POST",
+      body: JSON.stringify({ token: token.trim(), password, passwordConfirm }),
+    });
+  }
+  async requestVerification(email: string): Promise<void> {
+    await this.request("/api/collections/fuloos_users/request-verification", {
+      method: "POST",
+      body: JSON.stringify({ email: email.trim() }),
+    });
+  }
+  async confirmVerification(token: string): Promise<void> {
+    await this.request("/api/collections/fuloos_users/confirm-verification", {
+      method: "POST",
+      body: JSON.stringify({ token: token.trim() }),
+    });
+    if (this.session) {
+      await this.getSession().catch(() => null);
+    }
+  }
+  async changePassword(
+    oldPassword: string,
+    password: string,
+    passwordConfirm: string,
+  ): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    await this.request(
+      `/api/collections/fuloos_users/records/${encodeURIComponent(this.session.user.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ oldPassword, password, passwordConfirm }),
+      },
+    );
+  }
+  async requestEmailChange(newEmail: string): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    await this.request("/api/collections/fuloos_users/request-email-change", {
+      method: "POST",
+      body: JSON.stringify({ newEmail: newEmail.trim() }),
+    });
+  }
+  async confirmEmailChange(token: string, password: string): Promise<void> {
+    await this.request("/api/collections/fuloos_users/confirm-email-change", {
+      method: "POST",
+      body: JSON.stringify({ token: token.trim(), password }),
+    });
+    if (this.session) this.signOut();
+  }
+  async setMfaEnabled(enabled: boolean): Promise<Session> {
+    if (!this.session) throw new Error("Please sign in.");
+    const record = await this.request<{
+      id: string;
+      email: string;
+      verified?: boolean;
+      mfa_enabled?: boolean;
+    }>(
+      `/api/collections/fuloos_users/records/${encodeURIComponent(this.session.user.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ mfa_enabled: enabled }),
+      },
+    );
+    const updated: Session = {
+      token: this.session.token,
+      user: {
+        ...this.session.user,
+        email: record.email ?? this.session.user.email,
+        verified:
+          typeof record.verified === "boolean"
+            ? record.verified
+            : this.session.user.verified,
+        mfaEnabled:
+          typeof record.mfa_enabled === "boolean"
+            ? record.mfa_enabled
+            : enabled,
+      },
+    };
+    this.publish(updated);
+    return updated;
+  }
+  async signOutEverywhere(): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    await this.request("/api/fuloos/sign-out-everywhere", {
+      method: "POST",
+    });
+    this.signOut();
   }
   async signUp(
     email: string,
@@ -357,10 +570,17 @@ export class PocketBaseBackend {
         );
       throw e;
     }
-    return {
-      session: await this.signIn(email, password),
-      verificationRequired: false,
-    };
+    try {
+      return {
+        session: await this.signIn(email, password),
+        verificationRequired: false,
+      };
+    } catch (e) {
+      if (e instanceof BackendError && (e.status === 400 || e.status === 403)) {
+        return { session: null, verificationRequired: true };
+      }
+      throw e;
+    }
   }
   private async rows<T>(table: Table): Promise<T[]> {
     const items: T[] = [];
@@ -392,6 +612,19 @@ export class PocketBaseBackend {
   async listCsvPresets(): Promise<CsvPresetRecord[]> {
     if (!this.session) throw new Error("Please sign in.");
     return this.rows<CsvPresetRecord>("csv_presets");
+  }
+  /** Checks whether a fuloos_* collection is installed on the server. */
+  async probeCollection(table: Table): Promise<boolean> {
+    if (!this.session) throw new Error("Please sign in.");
+    try {
+      await this.request(
+        `/api/collections/fuloos_${table}/records?page=1&perPage=1&fields=id`,
+      );
+      return true;
+    } catch (e) {
+      if (e instanceof MissingCollectionError) return false;
+      throw e;
+    }
   }
   async load(): Promise<Ledger> {
     if (!this.session) throw new Error("Please sign in.");
@@ -533,6 +766,41 @@ export class PocketBaseBackend {
             ? pref.auto_match
             : "auto",
         dismissed_keys: parseDismissedKeys(pref.dismissed_keys),
+      } as RecordTypes[K];
+    }
+    if (table === "notification_prefs") {
+      const p = record as Partial<SavedNotificationPreferences>;
+      const validDays: readonly DigestDay[] = [
+        "sun",
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+      ];
+      const days = Number(p.upcoming_bill_days);
+      return {
+        id: String(p.id ?? ""),
+        email_enabled: Boolean(p.email_enabled),
+        upcoming_bill_enabled: Boolean(p.upcoming_bill_enabled),
+        upcoming_bill_days:
+          Number.isInteger(days) && days >= 1 && days <= 30 ? days : 3,
+        overdue_enabled: Boolean(p.overdue_enabled),
+        budget_80_enabled: Boolean(p.budget_80_enabled),
+        budget_100_enabled: Boolean(p.budget_100_enabled),
+        weekly_digest_enabled: Boolean(p.weekly_digest_enabled),
+        digest_day: validDays.includes(p.digest_day as DigestDay)
+          ? (p.digest_day as DigestDay)
+          : "sun",
+        timezone:
+          typeof p.timezone === "string" && p.timezone.trim()
+            ? p.timezone.trim()
+            : "Asia/Dubai",
+        channels:
+          p.channels && typeof p.channels === "object"
+            ? (p.channels as Record<string, boolean>)
+            : { email: Boolean(p.email_enabled) },
       } as RecordTypes[K];
     }
     return record;
@@ -750,6 +1018,61 @@ export class PocketBaseBackend {
     await this.request(
       `/api/collections/fuloos_${table}/records/${encodeURIComponent(id)}`,
       { method: "DELETE" },
+    );
+  }
+  /** Loads notification preferences, tolerating a missing collection on un-migrated servers. */
+  async loadNotificationPrefs(): Promise<{
+    prefs: NotificationPreferences;
+    supported: boolean;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    try {
+      const rows = await this.rows<SavedNotificationPreferences>(
+        "notification_prefs",
+      );
+      return {
+        prefs: rows[0]
+          ? this.normalize("notification_prefs", rows[0])
+          : { ...defaultNotificationPreferences },
+        supported: true,
+      };
+    } catch (e) {
+      if (e instanceof MissingCollectionError) {
+        return { prefs: { ...defaultNotificationPreferences }, supported: false };
+      }
+      throw e;
+    }
+  }
+  async saveNotificationPrefs(
+    prefs: NotificationPreferences,
+  ): Promise<NotificationPreferences> {
+    if (!this.session) throw new Error("Please sign in.");
+    const days = Math.max(
+      1,
+      Math.min(30, Math.round(Number(prefs.upcoming_bill_days) || 3)),
+    );
+    const body = {
+      email_enabled: Boolean(prefs.email_enabled),
+      upcoming_bill_enabled: Boolean(prefs.upcoming_bill_enabled),
+      upcoming_bill_days: days,
+      overdue_enabled: Boolean(prefs.overdue_enabled),
+      budget_80_enabled: Boolean(prefs.budget_80_enabled),
+      budget_100_enabled: Boolean(prefs.budget_100_enabled),
+      weekly_digest_enabled: Boolean(prefs.weekly_digest_enabled),
+      digest_day: prefs.digest_day || "sun",
+      timezone: prefs.timezone.trim() || "Asia/Dubai",
+      channels: {
+        ...(prefs.channels ?? {}),
+        email: Boolean(prefs.email_enabled),
+      },
+    };
+    return this.save("notification_prefs", body, prefs.id || undefined);
+  }
+  async sendTestNotificationEmail(): Promise<{ ok: boolean; message: string }> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.request<{ ok: boolean; message: string }>(
+      "/api/fuloos/notify-test",
+      { method: "POST" },
     );
   }
 }

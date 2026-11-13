@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   backend,
@@ -11,9 +11,8 @@ import { confirmDialog } from "./dialogStore";
 import { QueueDock, useLeaveWarning, useQueue } from "./QueueDock";
 import { TaskQueue } from "./taskQueue";
 import { rebaseEdit } from "./bulk";
-import { BudgetsPage, type BudgetDraft } from "./BudgetsView";
+import { type BudgetDraft } from "./BudgetsView";
 import { validateBudget } from "./budgets";
-import { RecurringPage } from "./RecurringView";
 import { TransactionsPanel } from "./TransactionTable";
 import { useDensity } from "./density";
 import { Auth } from "./Auth";
@@ -21,10 +20,36 @@ import { type EditorModalState } from "./EditorModal";
 import { OverviewPage, type SpendingItem } from "./OverviewPage";
 import { AccountsPage } from "./AccountsPage";
 import { CategoriesPage } from "./CategoriesPage";
-import { ReportsPage } from "./ReportsPage";
+import { SchemaBanner } from "./SchemaBanner";
+import { checkSchemaStatus, type SchemaStatus } from "./schemaStatus";
+import { AppLockScreen } from "./AppLock";
+import { SecuritySettings } from "./SecuritySettings";
+import {
+  clearAppLock,
+  loadAppLock,
+  loadIdleSessionTimeout,
+  shouldLockForIdle,
+  shouldSignOutForIdle,
+  type AppLockConfig,
+  type StorageLike,
+} from "./appLock";
+const BudgetsPage = lazy(() =>
+  import("./BudgetsView").then((m) => ({ default: m.BudgetsPage })),
+);
+const RecurringPage = lazy(() =>
+  import("./RecurringView").then((m) => ({ default: m.RecurringPage })),
+);
+const ReportsPage = lazy(() =>
+  import("./ReportsPage").then((m) => ({ default: m.ReportsPage })),
+);
 import { useRecurringActions } from "./useRecurringActions";
 import { useDeletionActions } from "./useDeletionActions";
 import { useImportAndBulk } from "./useImportAndBulk";
+import {
+  executeRestore,
+  type FuloosBackup,
+  type RestoreMode,
+} from "./backup";
 import { Sidebar } from "./Sidebar";
 import { AppModals } from "./AppModals";
 import { AppPageHeader, AppTopbar } from "./AppHeader";
@@ -53,6 +78,13 @@ import {
   periodLabel,
   periodMonths,
 } from "./period";
+import {
+  registerServiceWorker,
+  useInstallPrompt,
+  useOnlineStatus,
+} from "./pwa";
+import { PwaBanners, QuickAddFab, QuickAddModal } from "./QuickAdd";
+import { parseQuickAddUrl, type QuickAddDraft } from "./quickAdd";
 function demoId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -84,6 +116,18 @@ function App() {
     [rangeFrom, setRangeFrom] = useState(today().slice(0, 7)),
     [hidden, setHidden] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const appStorage = useMemo<StorageLike | undefined>(() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return undefined;
+    }
+  }, []);
+  const [lockConfig, setLockConfig] = useState<AppLockConfig | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [idleSignOutMinutes, setIdleSignOutMinutes] = useState(0);
+  const lastActiveRef = useRef(Date.now());
+  const bootCheckedRef = useRef(false);
   const [density] = useDensity();
   const [smsOpen, setSmsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -95,6 +139,47 @@ function App() {
     item?: Budget;
     draft?: Partial<BudgetDraft>;
   } | null>(null);
+  const online = useOnlineStatus();
+  const { canInstall, promptInstall } = useInstallPrompt();
+  const [swUpdate, setSwUpdate] = useState<(() => void) | null>(null);
+  const [quickAdd, setQuickAdd] = useState<Partial<QuickAddDraft> | null>(() => {
+    const parsed = parseQuickAddUrl(window.location.search);
+    if (parsed.open) {
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + window.location.hash,
+      );
+      return parsed.draft;
+    }
+    return null;
+  });
+  useEffect(
+    () => registerServiceWorker((apply) => setSwUpdate(() => apply)),
+    [],
+  );
+  useEffect(() => {
+    if (!session && !demo) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "n" && e.key !== "N") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (document.querySelector("dialog[open]")) return;
+      e.preventDefault();
+      setQuickAdd({});
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [session, demo]);
   const generation = useRef(0);
   // Background saves keep running while the user moves between pages.
   const queue = useMemo(() => new TaskQueue(), []);
@@ -192,17 +277,76 @@ function App() {
     if (!backend) return;
     backend
       .getSession()
-      .then(setSession)
-      .catch((e) => setError(errorMessage(e)))
+      .then((s) => {
+        if (s && !bootCheckedRef.current) {
+          const cfg = loadAppLock(appStorage, s.user.id);
+          if (cfg?.lockOnReopen) setLocked(true);
+        }
+        bootCheckedRef.current = true;
+        setSession(s);
+      })
+      .catch((e) => {
+        bootCheckedRef.current = true;
+        setError(errorMessage(e));
+      })
       .finally(() => setChecking(false));
     return backend.subscribe((s) => {
       setSession(s);
       if (!s) {
         generation.current++;
         setLedger(emptyLedger);
+        setLocked(false);
+        setLockConfig(null);
       }
     });
   }, []);
+  useEffect(() => {
+    if (!session || demo) {
+      setLockConfig(null);
+      setLocked(false);
+      setIdleSignOutMinutes(0);
+      return;
+    }
+    setLockConfig(loadAppLock(appStorage, session.user.id));
+    setIdleSignOutMinutes(loadIdleSessionTimeout(appStorage, session.user.id));
+    lastActiveRef.current = Date.now();
+  }, [session?.user.id, demo, appStorage]);
+  useEffect(() => {
+    if (!session || demo) return;
+    const bump = () => {
+      if (!locked) lastActiveRef.current = Date.now();
+    };
+    const checkIdle = () => {
+      const now = Date.now();
+      if (shouldSignOutForIdle(lastActiveRef.current, now, idleSignOutMinutes)) {
+        setError("Signed out due to inactivity.");
+        backend?.signOut();
+        return;
+      }
+      if (
+        !locked &&
+        lockConfig &&
+        shouldLockForIdle(lastActiveRef.current, now, lockConfig.idleMinutes)
+      ) {
+        setLocked(true);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") checkIdle();
+    };
+    window.addEventListener("pointerdown", bump, { passive: true });
+    window.addEventListener("keydown", bump, { passive: true });
+    window.addEventListener("touchstart", bump, { passive: true });
+    document.addEventListener("visibilitychange", onVisibility);
+    const timer = window.setInterval(checkIdle, 15_000);
+    return () => {
+      window.removeEventListener("pointerdown", bump);
+      window.removeEventListener("keydown", bump);
+      window.removeEventListener("touchstart", bump);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(timer);
+    };
+  }, [session?.user.id, demo, locked, lockConfig, idleSignOutMinutes]);
   async function load() {
     if (!backend || !session) return;
     const current = ++generation.current;
@@ -223,6 +367,23 @@ function App() {
   useEffect(() => {
     if (session && !demo) void load();
   }, [session?.user.id, demo]);
+  const [schemaStatus, setSchemaStatus] = useState<SchemaStatus | null>(null);
+  const [schemaDismissed, setSchemaDismissed] = useState(false);
+  useEffect(() => {
+    if (!backend || !session || demo) {
+      setSchemaStatus(null);
+      setSchemaDismissed(false);
+      return;
+    }
+    let active = true;
+    const api = backend;
+    checkSchemaStatus((table) => api.probeCollection(table)).then((status) => {
+      if (active) setSchemaStatus(status);
+    });
+    return () => {
+      active = false;
+    };
+  }, [session?.user.id, demo]);
   function startDemo() {
     setDemo(true);
     setLedger(demoLedger());
@@ -234,6 +395,9 @@ function App() {
     value: Record<string, unknown>,
     id?: string,
   ) {
+    if (!demo && !online) {
+      throw new Error("You're offline. Reconnect to save changes.");
+    }
     if (busy) throw new Error("Another operation is running.");
     setBusy(true);
     const current = generation.current;
@@ -304,6 +468,59 @@ function App() {
     } catch (e) {
       setError(errorMessage(e));
     }
+  }
+  async function restoreBackup(backup: FuloosBackup, mode: RestoreMode) {
+    const { presets: existingPresets } = await presetStore.load();
+    if (demo) {
+      const { ledger: nextLedger } = await executeRestore({
+        backup,
+        mode,
+        existingLedger: ledgerRef.current,
+        existingPresets,
+        presetStore,
+        demo: true,
+        demoId,
+      });
+      setLedger(nextLedger);
+      return;
+    }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const api = backend;
+    const stillOwner = ownerGuard();
+    const total =
+      backup.data.accounts.length +
+      backup.data.categories.length +
+      backup.data.transactions.length +
+      backup.data.recurring.length +
+      backup.data.recurring_occurrences.length +
+      backup.data.budgets.length +
+      backup.data.csv_presets.length +
+      1;
+    queue.enqueue({
+      label: `Restore backup (${backup.data.transactions.length} transactions)`,
+      total,
+      run: async (ctx) => {
+        checkOwner(stillOwner);
+        try {
+          const { ledger: nextLedger } = await executeRestore({
+            backup,
+            mode,
+            existingLedger: ledgerRef.current,
+            existingPresets,
+            presetStore,
+            backend: api,
+            demo: false,
+            demoId,
+            shouldContinue: stillOwner,
+            onProgress: (done) => ctx.progress(done),
+          });
+          if (stillOwner()) setLedger(nextLedger);
+        } catch (e) {
+          if (stillOwner()) await load();
+          throw e;
+        }
+      },
+    });
   }
   const {
     recurringModal,
@@ -503,9 +720,6 @@ function App() {
       setBusy(false);
     }
   }
-  if (checking) return <div className="loading">Opening Fuloos…</div>;
-  if (!session && !demo)
-    return <Auth onDemo={startDemo} externalError={error} />;
   const end = new Date(`${month}-01T00:00:00Z`);
   end.setUTCMonth(end.getUTCMonth() + 1);
   const start = new Date(`${month}-01T00:00:00Z`);
@@ -593,6 +807,31 @@ function App() {
           month,
         )
       : start.toISOString().slice(0, 7);
+  if (checking) return <div className="loading">Opening Fuloos…</div>;
+  if (!session && !demo)
+    return <Auth onDemo={startDemo} externalError={error} />;
+  if (session && !demo && locked && lockConfig)
+    return (
+      <AppLockScreen
+        email={session.user.email}
+        config={lockConfig}
+        storage={appStorage}
+        onUnlock={() => {
+          lastActiveRef.current = Date.now();
+          setLocked(false);
+        }}
+        onSignOut={() => {
+          setLocked(false);
+          backend?.signOut();
+        }}
+        onLockout={() => {
+          clearAppLock(appStorage, session.user.id);
+          setLocked(false);
+          setError("Signed out after too many incorrect PIN attempts.");
+          backend?.signOut();
+        }}
+      />
+    );
   return (
     <div className="shell">
       <Sidebar
@@ -623,6 +862,14 @@ function App() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
         <div className="content">
+          <PwaBanners
+            online={online}
+            demo={demo}
+            updateAvailable={Boolean(swUpdate)}
+            onApplyUpdate={() => swUpdate?.()}
+            canInstall={canInstall}
+            onInstall={() => void promptInstall()}
+          />
           <AppPageHeader
             page={page}
             demo={demo}
@@ -660,6 +907,13 @@ function App() {
               if (next.from) setRangeFrom(next.from);
             }}
           />
+          {!demo && (
+            <SchemaBanner
+              status={schemaStatus}
+              dismissed={schemaDismissed}
+              onDismiss={() => setSchemaDismissed(true)}
+            />
+          )}
           {page === "Overview" && (
             <OverviewPage
               ledger={ledger}
@@ -687,81 +941,87 @@ function App() {
             />
           )}
           {page === "Recurring" && (
-            <RecurringPage
-              ledger={ledger}
-              concealed={concealed}
-              busy={busy}
-              initialTab={recurringTab}
-              initialFilter={recurringFilter}
-              onAddSchedule={() => setRecurringModal({ open: true })}
-              onEditSchedule={(item) => setRecurringModal({ open: true, item })}
-              onTogglePause={(item) => void togglePauseRecurring(item)}
-              onDeleteSchedule={(item) => void remove("recurring", item.id)}
-              onConfirmOccurrence={(schedule, occurrenceDate) =>
-                setConfirmOcc({ schedule, occurrenceDate })
-              }
-              onUnlinkOccurrence={(occurrenceId) =>
-                void unlinkOccurrence(occurrenceId)
-              }
-              onRelinkOccurrence={(existing, schedule, occurrenceDate) =>
-                setConfirmOcc({
-                  schedule,
-                  occurrenceDate,
-                  existingConfirmation: existing,
-                })
-              }
-              onAcceptPattern={(pattern) => void acceptDetectedPattern(pattern)}
-              onEditPattern={(pattern) => editDetectedPattern(pattern)}
-              onDismissPattern={(patternKey) => void dismissPattern(patternKey)}
-              onConfirmMatchCandidate={(candidate) =>
-                void confirmLinkOccurrence(
-                  candidate.schedule,
-                  candidate.occurrenceDate,
-                  candidate.transaction.id,
-                  undefined,
-                  "manual",
-                  candidate.summaryReason,
-                )
-              }
-              onDismissMatchCandidate={(matchKey) =>
-                void dismissMatchCandidate(matchKey)
-              }
-              onUpdatePreferences={(prefs) => void savePreferences(prefs)}
-              onRestoreDismissed={() => void restoreDismissed()}
-              onRunReconciliation={() => void runAutoReconciliation()}
-            />
+            <Suspense fallback={<div className="loading-inline">Loading…</div>}>
+              <RecurringPage
+                ledger={ledger}
+                concealed={concealed}
+                busy={busy}
+                initialTab={recurringTab}
+                initialFilter={recurringFilter}
+                onAddSchedule={() => setRecurringModal({ open: true })}
+                onEditSchedule={(item) => setRecurringModal({ open: true, item })}
+                onTogglePause={(item) => void togglePauseRecurring(item)}
+                onDeleteSchedule={(item) => void remove("recurring", item.id)}
+                onConfirmOccurrence={(schedule, occurrenceDate) =>
+                  setConfirmOcc({ schedule, occurrenceDate })
+                }
+                onUnlinkOccurrence={(occurrenceId) =>
+                  void unlinkOccurrence(occurrenceId)
+                }
+                onRelinkOccurrence={(existing, schedule, occurrenceDate) =>
+                  setConfirmOcc({
+                    schedule,
+                    occurrenceDate,
+                    existingConfirmation: existing,
+                  })
+                }
+                onAcceptPattern={(pattern) => void acceptDetectedPattern(pattern)}
+                onEditPattern={(pattern) => editDetectedPattern(pattern)}
+                onDismissPattern={(patternKey) => void dismissPattern(patternKey)}
+                onConfirmMatchCandidate={(candidate) =>
+                  void confirmLinkOccurrence(
+                    candidate.schedule,
+                    candidate.occurrenceDate,
+                    candidate.transaction.id,
+                    undefined,
+                    "manual",
+                    candidate.summaryReason,
+                  )
+                }
+                onDismissMatchCandidate={(matchKey) =>
+                  void dismissMatchCandidate(matchKey)
+                }
+                onUpdatePreferences={(prefs) => void savePreferences(prefs)}
+                onRestoreDismissed={() => void restoreDismissed()}
+                onRunReconciliation={() => void runAutoReconciliation()}
+              />
+            </Suspense>
           )}
           {page === "Budgets" && (
-            <BudgetsPage
-              ledger={ledger}
-              month={month}
-              onMonthChange={(next) => {
-                // Keep a custom range's length when Budgets moves the shared month.
-                if (span === "custom")
-                  setRangeFrom((from) =>
-                    shiftMonth(from, monthsBetween(month, next) - 1),
-                  );
-                setMonth(next);
-              }}
-              concealed={concealed}
-              busy={busy}
-              onAdd={(draft) => setBudgetModal({ draft })}
-              onEdit={(item) => setBudgetModal({ item })}
-              onDelete={(item) => void remove("budgets", item.id)}
-            />
+            <Suspense fallback={<div className="loading-inline">Loading…</div>}>
+              <BudgetsPage
+                ledger={ledger}
+                month={month}
+                onMonthChange={(next) => {
+                  // Keep a custom range's length when Budgets moves the shared month.
+                  if (span === "custom")
+                    setRangeFrom((from) =>
+                      shiftMonth(from, monthsBetween(month, next) - 1),
+                    );
+                  setMonth(next);
+                }}
+                concealed={concealed}
+                busy={busy}
+                onAdd={(draft) => setBudgetModal({ draft })}
+                onEdit={(item) => setBudgetModal({ item })}
+                onDelete={(item) => void remove("budgets", item.id)}
+              />
+            </Suspense>
           )}
           {page === "Reports" && (
-            <ReportsPage
-              ledger={ledger}
-              budgetRangeStart={budgetRangeStart}
-              month={month}
-              view={view}
-              rangeLabel={rangeLabel}
-              summary={summary}
-              spending={spending}
-              concealed={concealed}
-              onManageBudgets={() => setPage("Budgets")}
-            />
+            <Suspense fallback={<div className="loading-inline">Loading…</div>}>
+              <ReportsPage
+                ledger={ledger}
+                budgetRangeStart={budgetRangeStart}
+                month={month}
+                view={view}
+                rangeLabel={rangeLabel}
+                summary={summary}
+                spending={spending}
+                concealed={concealed}
+                onManageBudgets={() => setPage("Budgets")}
+              />
+            </Suspense>
           )}
           {page === "Accounts" && (
             <AccountsPage
@@ -876,7 +1136,33 @@ function App() {
         confirmLinkOccurrence={confirmLinkOccurrence}
         modal={modal}
         setModal={setModal}
+        restoreBackup={restoreBackup}
+        security={
+          !demo && session ? (
+            <SecuritySettings
+              session={session}
+              storage={appStorage}
+              onLockNow={() => setLocked(true)}
+              onLockConfigChanged={setLockConfig}
+              onIdleTimeoutChanged={setIdleSignOutMinutes}
+              onCloseSettings={() => setSettingsOpen(false)}
+            />
+          ) : undefined
+        }
       />
+      <QuickAddFab disabled={busy} onClick={() => setQuickAdd({})} />
+      {quickAdd && (
+        <QuickAddModal
+          ledger={ledger}
+          initialDraft={quickAdd}
+          busy={busy}
+          online={online}
+          demo={demo}
+          onClose={() => setQuickAdd(null)}
+          onSave={save}
+          onAddAccount={() => setModal({ kind: "account" })}
+        />
+      )}
     </div>
   );
 }

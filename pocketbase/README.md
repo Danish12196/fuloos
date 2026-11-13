@@ -100,3 +100,26 @@ The frontend uses PocketBase's official SDK popup flow with a one-off realtime c
 4. Reload Fuloos. Choose Continue with Google and verify a new user and an existing user can authenticate. Keep the Google popup and PocketBase realtime connection reachable through your reverse proxy.
 
 No migration or container restart is required for this provider setting. OAuth must be configured on `fuloos_users`, not `_superusers` or another application's users collection. Google login has not been end-to-end verified until the provider credentials are configured and the consent flow is completed.
+
+## Email notifications (`1794540000_notifications.js` + `pb_hooks`)
+
+Fuloos supports opt-in email notifications (upcoming bills due N days ahead, overdue recurring occurrences, monthly budgets reaching 80% or exceeding 100%, and an optional weekly summary digest) evaluated server-side by PocketBase JS hooks.
+
+1. **Apply the migration**: Copy `pocketbase/pb_migrations/1794540000_notifications.js` into your PocketBase `pb_migrations` directory and run `./pocketbase migrate up` (or restart PocketBase). This creates owner-only `fuloos_notification_prefs` and `fuloos_notification_log` collections.
+2. **Install the hooks**: Copy both `pocketbase/pb_hooks/notifications_lib.js` and `pocketbase/pb_hooks/notifications.pb.js` into your PocketBase `pb_hooks` directory and restart PocketBase.
+   - `notifications.pb.js` registers an hourly cron job (`fuloos_notifications_hourly`, `0 * * * *`) and the authenticated, rate-limited `POST /api/fuloos/notify-test` endpoint.
+   - All alerts are **off by default** (`email_enabled = false`) until a user opts in via **Settings → Notifications**.
+   - Sent notifications are deduplicated per `(user_id, dedup_key)` in `fuloos_notification_log` so the same bill/month/week alert is never sent twice.
+3. **Configure SMTP**: In the PocketBase Admin UI, open **Settings → Mail settings**, set your **Sender name** / **Sender address**, enable **SMTP**, and enter your SMTP host, port, username, and password. Use PocketBase's built-in **Send test email** button or the in-app **Settings → Notifications → Send test email** button to verify delivery.
+4. **Configure `APP_URL`**: Set the `APP_URL` environment variable on the PocketBase process (for example, `APP_URL=https://fuloos.vercel.app`) so notification emails include a working **Manage / Unsubscribe** link (`/?settings=notifications`).
+
+## Account security (`1794520000_account_security.js` + `pb_hooks`)
+
+1. **Opt-in MFA / Email OTP (`1794520000_account_security.js`)**:
+   - Copy `pocketbase/pb_migrations/1794520000_account_security.js` into your PocketBase `pb_migrations` directory and run `./pocketbase migrate up` (or restart PocketBase).
+   - This adds a `mfa_enabled` boolean field on `fuloos_users` (default `false`, so existing and new users are not forced into MFA silently), enables Email OTP (`duration: 180`, `length: 8`), and sets `mfa.enabled = true` with `mfa.rule = "mfa_enabled = true"`.
+   - **SMTP requirement**: Email OTP, password reset, email verification, and email change all require SMTP to be configured in PocketBase Admin UI (**Settings → Mail settings**).
+   - **Operator override**: An operator can enable MFA globally for all users by changing `fuloos_users → Options → MFA → Rule` to `""` (empty) in the PocketBase Admin UI, or keep `"mfa_enabled = true"` so each user opts in from **Settings → Account & Security**.
+2. **Sign out everywhere (`pb_hooks/fuloos_security.pb.js`)**:
+   - PocketBase does not allow regular users to rotate their own `tokenKey` through the standard record `PATCH` API (non-superuser updates to `tokenKey` are ignored).
+   - Copy `pocketbase/pb_hooks/fuloos_security.pb.js` into your PocketBase `pb_hooks` directory and restart PocketBase. It registers `POST /api/fuloos/sign-out-everywhere` (authenticated to `fuloos_users`), which calls `auth.refreshTokenKey()` and `$app.save(auth)` to invalidate all existing JWTs for that user across all browsers and devices.
