@@ -89,14 +89,14 @@ test("transactionsToCsv exports filtered transactions with account/category name
   const lines = csv.split("\r\n");
   assert.equal(
     lines[0],
-    "Date,Type,Amount (AED),Account,To Account,Category,Payee,Notes",
+    "Date,Type,Amount (AED),Account,To Account,Category,Payee,Notes,Currency,Original Amount,Original Currency,FX Rate",
   );
   assert.ok(lines[1].includes("2026-03-01,expense,45.99,ADCB Current,,Groceries,"));
   assert.ok(lines[1].includes("'=HYPERLINK("));
   assert.ok(lines[1].includes('"Weekly shop, line 1\nline 2"'));
   assert.equal(
     lines[2],
-    "2026-03-02,transfer,1000.00,ADCB Current,Liv Savings,,'@transfer,",
+    "2026-03-02,transfer,1000.00,ADCB Current,Liv Savings,,'@transfer,,AED,,,",
   );
 
   const subsetCsv = transactionsToCsv([ledger.transactions[1]], ledger);

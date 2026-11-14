@@ -48,6 +48,24 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
     color: "#1d5b48",
     emoji: "🏦",
   });
+  const cardA = await backendA.save("accounts", {
+    name: "User A Card",
+    type: "credit_card",
+    opening_balance: -50000,
+    opening_date: "2026-01-01",
+    color: "#696198",
+    emoji: "💳",
+    credit_limit: 2500000,
+    statement_day: 20,
+    payment_due_day: 10,
+    apr_bps: 2499,
+    minimum_payment: 50000,
+  });
+  assert.equal(cardA.credit_limit, 2500000);
+  assert.equal(cardA.statement_day, 20);
+  assert.equal(cardA.payment_due_day, 10);
+  assert.equal(cardA.apr_bps, 2499);
+  assert.equal(cardA.minimum_payment, 50000);
   const categoryA = await backendA.save("categories", {
     name: "User A Groceries",
     description: "Food",
@@ -146,6 +164,22 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
     status: "pending",
     created_at_iso: "2026-01-15T10:00:00.000Z",
   });
+  const nwItemA = await backendA.save("net_worth_items", {
+    name: "User A Gold",
+    kind: "asset",
+    category: "gold",
+    current_value: 250000,
+    as_of_date: "2026-01-15",
+    color: "#b08448",
+    emoji: "🪙",
+    notes: "User A gold",
+  });
+  const nwSnapshotA = await backendA.save("net_worth_snapshots", {
+    item_id: nwItemA.id,
+    value: 250000,
+    date: "2026-01-15",
+    notes: "Initial valuation",
+  });
 
   // 3. User B loads their ledger and sees zero records from User A.
   const ledgerB = await backendB.load();
@@ -157,6 +191,8 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
   assert.equal(ledgerB.budgets?.length ?? 0, 0);
   assert.equal(ledgerB.goals?.length ?? 0, 0);
   assert.equal(ledgerB.goal_contributions?.length ?? 0, 0);
+  assert.equal(ledgerB.net_worth_items?.length ?? 0, 0);
+  assert.equal(ledgerB.net_worth_snapshots?.length ?? 0, 0);
   assert.equal(ledgerB.rules?.length ?? 0, 0);
   assert.deepEqual(ledgerB.recurring_prefs?.dismissed_keys, []);
   const alertsB = await backendB.loadCapturedAlerts();
@@ -181,6 +217,8 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
     { table: "budgets", id: budgetA.id },
     { table: "goals", id: goalA.id },
     { table: "goal_contributions", id: contributionA.id },
+    { table: "net_worth_items", id: nwItemA.id },
+    { table: "net_worth_snapshots", id: nwSnapshotA.id },
     { table: "capture_tokens", id: captureTokenA.id },
     { table: "captured_alerts", id: capturedAlertA.id },
   ];
@@ -364,10 +402,41 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
     isRejectedIsolation,
   );
 
+  await assert.rejects(
+    () =>
+      backendB.save("net_worth_snapshots", {
+        item_id: nwItemA.id,
+        value: 10000,
+        date: "2026-01-16",
+        notes: "Hijack net worth item",
+      }),
+    isRejectedIsolation,
+  );
+  await assert.rejects(
+    () =>
+      backendB.save("net_worth_items", {
+        name: "Mismatched kind",
+        kind: "asset",
+        category: "mortgage",
+        current_value: 10000,
+        as_of_date: "2026-01-16",
+        color: "#1d5b48",
+        notes: "",
+      }),
+    isRejectedIsolation,
+  );
+
   // 6. User A's load still only contains User A's own records.
   const ledgerA = await backendA.load();
-  assert.equal(ledgerA.accounts.length, 1);
-  assert.equal(ledgerA.accounts[0].id, accountA.id);
+  assert.equal(ledgerA.accounts.length, 2);
+  assert.ok(ledgerA.accounts.some((a) => a.id === accountA.id));
+  const loadedCardA = ledgerA.accounts.find((a) => a.id === cardA.id);
+  assert.ok(loadedCardA);
+  assert.equal(loadedCardA.credit_limit, 2500000);
+  assert.equal(loadedCardA.statement_day, 20);
+  assert.equal(loadedCardA.payment_due_day, 10);
+  assert.equal(loadedCardA.apr_bps, 2499);
+  assert.equal(loadedCardA.minimum_payment, 50000);
   assert.equal(ledgerA.categories.length, 1);
   assert.equal(ledgerA.transactions.length, 1);
   assert.deepEqual(ledgerA.transactions[0].tags, ["groceries", "weekly"]);
@@ -378,8 +447,54 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
   assert.equal(ledgerA.budgets?.length, 1);
   assert.equal(ledgerA.goals?.length, 1);
   assert.equal(ledgerA.goal_contributions?.length, 1);
+  assert.equal(ledgerA.net_worth_items?.length, 1);
+  assert.equal(ledgerA.net_worth_snapshots?.length, 1);
   const alertsA = await backendA.loadCapturedAlerts();
   assert.equal(alertsA.supported, true);
   assert.equal(alertsA.alerts.length, 1);
   assert.equal(alertsA.alerts[0].id, capturedAlertA.id);
+
+  // 7. Multi-currency round-trip and SQLite trigger enforcement.
+  const usdAccount = await backendB.save("accounts", {
+    name: "User B USD",
+    type: "current",
+    currency: "USD",
+    opening_balance: 0,
+    opening_date: "2026-01-01",
+    color: "#696198",
+  });
+  assert.equal(usdAccount.currency, "USD");
+  const fxTx = await backendB.save("transactions", {
+    type: "expense",
+    amount: 36725,
+    account_id: usdAccount.id,
+    to_account_id: "",
+    category_id: categoryB.id,
+    date: "2026-01-20",
+    payee: "AWS",
+    notes: "",
+    original_currency: "USD",
+    original_amount: 10000,
+    fx_rate: 3.6725,
+  });
+  assert.equal(fxTx.original_currency, "USD");
+  assert.equal(fxTx.original_amount, 10000);
+  assert.equal(fxTx.fx_rate, 3.6725);
+  await assert.rejects(
+    () =>
+      backendB.save("transactions", {
+        type: "expense",
+        amount: 36725,
+        account_id: usdAccount.id,
+        to_account_id: "",
+        category_id: categoryB.id,
+        date: "2026-01-20",
+        payee: "Bad FX",
+        notes: "",
+        original_currency: "USD",
+        original_amount: 10000,
+        fx_rate: 0,
+      }),
+    isRejectedIsolation,
+  );
 });

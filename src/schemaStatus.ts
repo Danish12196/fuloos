@@ -14,6 +14,8 @@ export const EXPECTED_COLLECTIONS: readonly Table[] = [
   "ml_settings",
   "ml_examples",
   "rules",
+  "net_worth_items",
+  "net_worth_snapshots",
 ];
 
 export interface SchemaStatus {

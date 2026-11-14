@@ -1,4 +1,5 @@
 import {
+  Landmark,
   LayoutDashboard,
   Leaf,
   LogOut,
@@ -51,6 +52,7 @@ export function Sidebar({
           { name: "Recurring", icon: Repeat },
           { name: "Budgets", icon: PiggyBank },
           { name: "Goals", icon: Target },
+          { name: "Net Worth", icon: Landmark },
           { name: "Reports", icon: LayoutDashboard },
           { name: "Accounts", icon: Wallet },
           { name: "Categories", icon: Tags },

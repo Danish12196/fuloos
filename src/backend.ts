@@ -20,6 +20,7 @@ import {
   type TransactionRule,
 } from "./domain.ts";
 import { normalizeSplits, normalizeTags } from "./enrichment.ts";
+import type { NetWorthItem, NetWorthSnapshot } from "./netWorth.ts";
 export interface Session {
   token: string;
   user: {
@@ -46,7 +47,9 @@ export type Table =
   | "notification_prefs"
   | "notification_log"
   | "capture_tokens"
-  | "captured_alerts";
+  | "captured_alerts"
+  | "net_worth_items"
+  | "net_worth_snapshots";
 export interface CsvPresetRecord {
   id: string;
   name: string;
@@ -82,6 +85,8 @@ type RecordTypes = {
   notification_log: NotificationLogRecord;
   capture_tokens: CaptureTokenInfo;
   captured_alerts: CapturedAlert;
+  net_worth_items: NetWorthItem;
+  net_worth_snapshots: NetWorthSnapshot;
 };
 /** AI suggestion settings and correction log (see src/ledger/learning.ts). */
 export interface MlSettingsRecord {
@@ -658,6 +663,8 @@ export class PocketBaseBackend {
       goals,
       goalContributions,
       rules,
+      netWorthItems,
+      netWorthSnapshots,
     ] = await Promise.all([
       this.rows<Account>("accounts"),
       this.rows<Category>("categories"),
@@ -669,9 +676,11 @@ export class PocketBaseBackend {
       this.optionalRows<SavingsGoal>("goals"),
       this.optionalRows<GoalContribution>("goal_contributions"),
       this.optionalRows<TransactionRule>("rules"),
+      this.optionalRows<NetWorthItem>("net_worth_items"),
+      this.optionalRows<NetWorthSnapshot>("net_worth_snapshots"),
     ]);
     return {
-      accounts,
+      accounts: accounts.map((a) => this.normalize("accounts", a)),
       categories,
       transactions: records.map((t) => this.normalize("transactions", t)),
       recurring: recurring.map((r) => this.normalize("recurring", r)),
@@ -687,6 +696,12 @@ export class PocketBaseBackend {
         this.normalize("goal_contributions", c),
       ),
       rules: rules.map((r) => this.normalize("rules", r)),
+      net_worth_items: netWorthItems.map((i) =>
+        this.normalize("net_worth_items", i),
+      ),
+      net_worth_snapshots: netWorthSnapshots.map((s) =>
+        this.normalize("net_worth_snapshots", s),
+      ),
     };
   }
   private prepareBody<K extends Table>(
@@ -709,8 +724,30 @@ export class PocketBaseBackend {
       "account_id",
       "transaction_id",
       "set_category_id",
+      "currency",
+      "original_currency",
     ]) {
       if (body[key] === null) body[key] = "";
+    }
+    if (table === "accounts") {
+      for (const key of [
+        "credit_limit",
+        "statement_day",
+        "payment_due_day",
+        "apr_bps",
+        "minimum_payment",
+      ]) {
+        if (body[key] === null || body[key] === "") body[key] = 0;
+      }
+    }
+    if (
+      table === "transactions" &&
+      "original_currency" in body &&
+      (!body.original_currency || body.original_currency === "AED")
+    ) {
+      body.original_currency = "";
+      body.original_amount = 0;
+      body.fx_rate = 0;
     }
     if (table === "recurring_prefs" && "dismissed_keys" in body) {
       body.dismissed_keys = serializeDismissedKeys(body.dismissed_keys);
@@ -789,10 +826,40 @@ export class PocketBaseBackend {
     table: K,
     record: RecordTypes[K],
   ): RecordTypes[K] {
+    if (table === "accounts") {
+      const acc = { ...(record as Account) };
+      if (acc.currency && acc.currency.trim()) {
+        acc.currency = acc.currency.trim().toUpperCase();
+      } else {
+        delete acc.currency;
+      }
+      for (const key of [
+        "credit_limit",
+        "statement_day",
+        "payment_due_day",
+        "apr_bps",
+        "minimum_payment",
+      ] as const) {
+        const val = acc[key];
+        if (val != null && Number.isFinite(Number(val)) && Number(val) > 0) {
+          acc[key] = Math.trunc(Number(val));
+        } else {
+          delete acc[key];
+        }
+      }
+      return acc as RecordTypes[K];
+    }
     if (table === "transactions") {
-      const tx = record as Transaction;
+      const tx = { ...(record as Transaction) };
       const tags = normalizeTags(tx.tags);
       const splits = normalizeSplits(tx.splits);
+      const hasForeign =
+        Boolean(tx.original_currency) && tx.original_currency !== "AED";
+      if (!hasForeign) {
+        delete tx.original_currency;
+        delete tx.original_amount;
+        delete tx.fx_rate;
+      }
       return {
         ...tx,
         to_account_id: tx.to_account_id || null,
@@ -986,6 +1053,30 @@ export class PocketBaseBackend {
             ? a.status
             : "pending",
         created_at_iso: String(a.created_at_iso ?? ""),
+      } as RecordTypes[K];
+    }
+    if (table === "net_worth_items") {
+      const i = record as NetWorthItem;
+      return {
+        id: i.id,
+        name: String(i.name ?? ""),
+        kind: i.kind === "liability" ? "liability" : "asset",
+        category: i.category,
+        current_value: Number(i.current_value ?? 0),
+        as_of_date: String(i.as_of_date ?? ""),
+        notes: i.notes ?? "",
+        color: i.color || "#1d5b48",
+        emoji: i.emoji || undefined,
+      } as RecordTypes[K];
+    }
+    if (table === "net_worth_snapshots") {
+      const s = record as NetWorthSnapshot;
+      return {
+        id: s.id,
+        item_id: s.item_id,
+        value: Number(s.value ?? 0),
+        date: String(s.date ?? ""),
+        notes: s.notes ?? "",
       } as RecordTypes[K];
     }
     return record;

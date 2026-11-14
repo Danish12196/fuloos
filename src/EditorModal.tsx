@@ -15,6 +15,16 @@ import {
 } from "lucide-react";
 import { ColorPicker, EmojiField } from "./Appearance";
 import {
+  convertToAedFils,
+  DEFAULT_CURRENCY,
+  formatCurrencyInput,
+  getReferenceFxRate,
+  normalizeCurrencyCode,
+  parseCurrencyMinor,
+  REFERENCE_RATES_NOTE,
+  SUPPORTED_CURRENCIES,
+} from "./currency";
+import {
   balance,
   balanceAsOfDate,
   errorMessage,
@@ -98,11 +108,52 @@ export function Editor({
 }) {
   const item = modal.item;
   const txItem = modal.kind === "transaction" ? modal.item : undefined;
+  const accItem = modal.kind === "account" ? modal.item : undefined;
+  const [accountType, setAccountType] = useState<AccountType>(
+    accItem?.type ?? "current",
+  );
   const [kind, setKind] = useState<Kind>(txItem ? txItem.type : "expense"),
     [error, setError] = useState("");
   const [amountText, setAmountText] = useState(
     txItem ? (txItem.amount / 100).toFixed(2) : "",
   );
+  const [accountId, setAccountId] = useState(
+    () => txItem?.account_id ?? ledger.accounts[0]?.id ?? "",
+  );
+  const initialAccountCurrency = normalizeCurrencyCode(
+    ledger.accounts.find((a) => a.id === (txItem?.account_id ?? ledger.accounts[0]?.id))
+      ?.currency,
+  );
+  const [foreignEnabled, setForeignEnabled] = useState(() =>
+    txItem
+      ? Boolean(txItem.original_currency && txItem.original_currency !== DEFAULT_CURRENCY)
+      : initialAccountCurrency !== DEFAULT_CURRENCY,
+  );
+  const [originalCurrency, setOriginalCurrency] = useState(() => {
+    if (txItem?.original_currency && txItem.original_currency !== DEFAULT_CURRENCY) {
+      return txItem.original_currency;
+    }
+    return initialAccountCurrency !== DEFAULT_CURRENCY
+      ? initialAccountCurrency
+      : "USD";
+  });
+  const [originalAmountText, setOriginalAmountText] = useState(() =>
+    txItem?.original_currency &&
+    txItem.original_currency !== DEFAULT_CURRENCY &&
+    txItem.original_amount !== undefined
+      ? formatCurrencyInput(txItem.original_amount, txItem.original_currency)
+      : "",
+  );
+  const [fxRateText, setFxRateText] = useState(() => {
+    if (txItem?.fx_rate && txItem.fx_rate > 0) return String(txItem.fx_rate);
+    const curr =
+      txItem?.original_currency && txItem.original_currency !== DEFAULT_CURRENCY
+        ? txItem.original_currency
+        : initialAccountCurrency !== DEFAULT_CURRENCY
+          ? initialAccountCurrency
+          : "USD";
+    return String(getReferenceFxRate(curr));
+  });
   const [categoryId, setCategoryId] = useState(
     txItem?.type !== "transfer" ? (txItem?.category_id ?? "") : "",
   );
@@ -245,6 +296,24 @@ export function Editor({
     );
   }
 
+  function syncAedFromForeign(
+    nextOrigText: string,
+    nextCurr: string,
+    nextRateText: string,
+  ) {
+    try {
+      if (!nextOrigText.trim()) return;
+      const origMinor = parseCurrencyMinor(nextOrigText, nextCurr);
+      const rate = Number(nextRateText);
+      if (origMinor >= 0 && Number.isFinite(rate) && rate > 0) {
+        const aedFils = convertToAedFils(origMinor, nextCurr, rate);
+        setAmountText((aedFils / 100).toFixed(2));
+      }
+    } catch {
+      // Allow incomplete typing while editing.
+    }
+  }
+
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError("");
@@ -256,14 +325,70 @@ export function Editor({
         const asOf = s("balance_as_of") || today();
         if (balanceText && !isIsoCalendarDate(asOf))
           throw new Error("Choose a valid date for the balance.");
+        const accType = s("type") as AccountType;
+        let creditCardFields: Record<string, number> = {
+          credit_limit: 0,
+          statement_day: 0,
+          payment_due_day: 0,
+          apr_bps: 0,
+          minimum_payment: 0,
+        };
+        if (accType === "credit_card") {
+          const limitText = s("credit_limit");
+          const minPayText = s("minimum_payment");
+          const stmtText = s("statement_day");
+          const dueText = s("payment_due_day");
+          const aprText = s("apr_pct");
+
+          const creditLimit = limitText ? minor(limitText) : 0;
+          if (creditLimit < 0)
+            throw new Error("Credit limit must be zero or greater.");
+          const minPayment = minPayText ? minor(minPayText) : 0;
+          if (minPayment < 0)
+            throw new Error("Minimum payment must be zero or greater.");
+
+          let statementDay = 0;
+          if (stmtText) {
+            const parsed = Number(stmtText);
+            if (!Number.isInteger(parsed) || parsed < 1 || parsed > 31)
+              throw new Error("Statement day must be between 1 and 31.");
+            statementDay = parsed;
+          }
+
+          let paymentDueDay = 0;
+          if (dueText) {
+            const parsed = Number(dueText);
+            if (!Number.isInteger(parsed) || parsed < 1 || parsed > 31)
+              throw new Error("Payment due day must be between 1 and 31.");
+            paymentDueDay = parsed;
+          }
+
+          let aprBps = 0;
+          if (aprText) {
+            const parsed = Number(aprText);
+            if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1000)
+              throw new Error("APR must be between 0% and 1000%.");
+            aprBps = Math.round(parsed * 100);
+          }
+
+          creditCardFields = {
+            credit_limit: creditLimit,
+            statement_day: statementDay,
+            payment_due_day: paymentDueDay,
+            apr_bps: aprBps,
+            minimum_payment: minPayment,
+          };
+        }
         const value = {
           name: s("name"),
-          type: s("type"),
+          type: accType,
+          currency: normalizeCurrencyCode(s("currency")),
           // No balance given: the balance is just the sum of transactions.
           opening_balance: balanceText ? minor(balanceText) : 0,
           opening_date: balanceText ? openingDateFor(asOf) : NO_BALANCE_DATE,
           color: s("color"),
           emoji: s("emoji"),
+          ...creditCardFields,
         };
         if (!value.name) throw new Error("Enter an account name.");
         await save("accounts", value, item?.id);
@@ -277,13 +402,29 @@ export function Editor({
         if (!value.name) throw new Error("Enter a category name.");
         await save("categories", value, item?.id);
       } else {
+        let foreignFields: Record<string, unknown> = { original_currency: "" };
+        if (foreignEnabled) {
+          if (!originalAmountText.trim()) {
+            throw new Error("Enter the original currency amount.");
+          }
+          const origMinor = parseCurrencyMinor(originalAmountText, originalCurrency);
+          const fxRate = Number(fxRateText);
+          if (!Number.isFinite(fxRate) || fxRate <= 0) {
+            throw new Error("Enter an exchange rate greater than zero.");
+          }
+          foreignFields = {
+            original_currency: originalCurrency,
+            original_amount: origMinor,
+            fx_rate: fxRate,
+          };
+        }
         const txAmount = minor(amountText);
         const activeSplits =
           kind !== "transfer" && splits.length > 0 ? parsedSplits : [];
         const value: Record<string, unknown> = {
           type: kind,
           amount: txAmount,
-          account_id: s("account_id"),
+          account_id: accountId || s("account_id"),
           to_account_id: kind === "transfer" ? s("to_account_id") : null,
           category_id: kind === "transfer" ? null : categoryId || null,
           date: s("date"),
@@ -291,6 +432,7 @@ export function Editor({
           notes: notes.trim(),
           tags,
           splits: activeSplits,
+          ...foreignFields,
         };
         validateTransaction(
           { ...(value as Omit<Transaction, "id">), id: item?.id },
@@ -393,19 +535,137 @@ export function Editor({
                 onChange={(e) => setAmountText(e.target.value)}
               />
             </label>
+            <div className="enrichment-section">
+              <div className="enrichment-section-head">
+                <label className="selection-label">
+                  <input
+                    type="checkbox"
+                    checked={foreignEnabled}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setForeignEnabled(checked);
+                      if (checked) {
+                        syncAedFromForeign(
+                          originalAmountText,
+                          originalCurrency,
+                          fxRateText,
+                        );
+                      }
+                    }}
+                  />
+                  <span>Foreign currency</span>
+                </label>
+                {foreignEnabled && (
+                  <span className="muted small">Explicit FX to AED</span>
+                )}
+              </div>
+              {foreignEnabled && (
+                <>
+                  <div className="form-row">
+                    <label>
+                      Currency
+                      <select
+                        name="original_currency"
+                        value={originalCurrency}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const nextCurr = e.target.value;
+                          const nextRate = String(getReferenceFxRate(nextCurr));
+                          setOriginalCurrency(nextCurr);
+                          setFxRateText(nextRate);
+                          syncAedFromForeign(
+                            originalAmountText,
+                            nextCurr,
+                            nextRate,
+                          );
+                        }}
+                      >
+                        {SUPPORTED_CURRENCIES.filter(
+                          (c) => c.code !== DEFAULT_CURRENCY,
+                        ).map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.code} — {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Original amount ({originalCurrency})
+                      <input
+                        name="original_amount"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={originalAmountText}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const nextOrig = e.target.value;
+                          setOriginalAmountText(nextOrig);
+                          syncAedFromForeign(
+                            nextOrig,
+                            originalCurrency,
+                            fxRateText,
+                          );
+                        }}
+                      />
+                    </label>
+                    <label>
+                      Rate (1 {originalCurrency} = AED)
+                      <input
+                        name="fx_rate"
+                        inputMode="decimal"
+                        placeholder="3.6725"
+                        value={fxRateText}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const nextRate = e.target.value;
+                          setFxRateText(nextRate);
+                          syncAedFromForeign(
+                            originalAmountText,
+                            originalCurrency,
+                            nextRate,
+                          );
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <p className="form-hint">{REFERENCE_RATES_NOTE}</p>
+                </>
+              )}
+            </div>
             <div className="form-row">
               <label>
                 {kind === "transfer" ? "From account" : "Account"}
                 <select
                   name="account_id"
                   required
-                  defaultValue={
-                    modal.item?.account_id ?? ledger.accounts[0]?.id
-                  }
+                  value={accountId}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    setAccountId(nextId);
+                    if (!txItem) {
+                      const acc = ledger.accounts.find((a) => a.id === nextId);
+                      const accCurr = normalizeCurrencyCode(acc?.currency);
+                      if (accCurr !== DEFAULT_CURRENCY) {
+                        const nextRate = String(getReferenceFxRate(accCurr));
+                        setForeignEnabled(true);
+                        setOriginalCurrency(accCurr);
+                        setFxRateText(nextRate);
+                        syncAedFromForeign(
+                          originalAmountText,
+                          accCurr,
+                          nextRate,
+                        );
+                      }
+                    }
+                  }}
                 >
                   {ledger.accounts.map((a) => (
                     <option value={a.id} key={a.id}>
                       {a.name}
+                      {a.currency && a.currency !== "AED"
+                        ? ` (${a.currency})`
+                        : ""}
                     </option>
                   ))}
                 </select>
@@ -762,16 +1022,35 @@ export function Editor({
                 placeholder="e.g. My everyday account"
               />
             </label>
-            <label>
-              Account type
-              <select name="type" defaultValue={modal.item?.type ?? "current"}>
-                {Object.entries(ACCOUNT_TYPES).map(([value, label]) => (
-                  <option value={value} key={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="form-row">
+              <label>
+                Account type
+                <select
+                  name="type"
+                  value={accountType}
+                  onChange={(e) => setAccountType(e.target.value as AccountType)}
+                >
+                  {Object.entries(ACCOUNT_TYPES).map(([value, label]) => (
+                    <option value={value} key={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Currency <span className="muted">Optional</span>
+                <select
+                  name="currency"
+                  defaultValue={normalizeCurrencyCode(modal.item?.currency)}
+                >
+                  {SUPPORTED_CURRENCIES.map((c) => (
+                    <option value={c.code} key={c.code}>
+                      {c.code} — {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="form-row">
               <label>
                 Balance (AED) <span className="muted">Optional</span>
@@ -814,6 +1093,80 @@ export function Editor({
                 </>
               )}
             </p>
+            {accountType === "credit_card" && (
+              <div className="enrichment-section">
+                <div className="enrichment-section-head">
+                  <span className="field-label">
+                    Credit card details <span className="muted">Optional</span>
+                  </span>
+                </div>
+                <div className="form-row">
+                  <label>
+                    Credit limit (AED)
+                    <input
+                      inputMode="decimal"
+                      name="credit_limit"
+                      placeholder="e.g. 25000.00"
+                      defaultValue={
+                        modal.item?.credit_limit
+                          ? (modal.item.credit_limit / 100).toFixed(2)
+                          : ""
+                      }
+                    />
+                  </label>
+                  <label>
+                    Minimum payment (AED)
+                    <input
+                      inputMode="decimal"
+                      name="minimum_payment"
+                      placeholder="e.g. 500.00"
+                      defaultValue={
+                        modal.item?.minimum_payment
+                          ? (modal.item.minimum_payment / 100).toFixed(2)
+                          : ""
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="form-row">
+                  <label>
+                    Statement day (1–31)
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      name="statement_day"
+                      placeholder="e.g. 20"
+                      defaultValue={modal.item?.statement_day || ""}
+                    />
+                  </label>
+                  <label>
+                    Payment due day (1–31)
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      name="payment_due_day"
+                      placeholder="e.g. 10"
+                      defaultValue={modal.item?.payment_due_day || ""}
+                    />
+                  </label>
+                  <label>
+                    APR (%)
+                    <input
+                      inputMode="decimal"
+                      name="apr_pct"
+                      placeholder="e.g. 29.99"
+                      defaultValue={
+                        modal.item?.apr_bps
+                          ? (modal.item.apr_bps / 100).toFixed(2)
+                          : ""
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
             <EmojiField defaultValue={modal.item?.emoji} />
             <ColorPicker
               defaultValue={
