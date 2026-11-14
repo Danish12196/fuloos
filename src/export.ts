@@ -1,4 +1,10 @@
 import type { BudgetReport } from "./budgets.ts";
+import {
+  DEFAULT_CURRENCY,
+  formatCurrencyInput,
+  formatFxRate,
+  normalizeCurrencyCode,
+} from "./currency.ts";
 import type { Ledger, Transaction } from "./domain.ts";
 
 export interface SpendingSummaryItem {
@@ -62,6 +68,9 @@ export function transactionsToCsv(
   ledger: Ledger,
 ): string {
   const accountNames = new Map(ledger.accounts.map((a) => [a.id, a.name]));
+  const accountCurrencies = new Map(
+    ledger.accounts.map((a) => [a.id, normalizeCurrencyCode(a.currency)]),
+  );
   const categoryNames = new Map(ledger.categories.map((c) => [c.id, c.name]));
 
   const lines: string[] = [
@@ -74,10 +83,21 @@ export function transactionsToCsv(
       "Category",
       "Payee",
       "Notes",
+      "Currency",
+      "Original Amount",
+      "Original Currency",
+      "FX Rate",
     ]),
   ];
 
   for (const t of transactions) {
+    const accountCurrency =
+      accountCurrencies.get(t.account_id) ?? DEFAULT_CURRENCY;
+    const hasForeign =
+      Boolean(t.original_currency) &&
+      t.original_currency !== DEFAULT_CURRENCY &&
+      t.original_amount !== undefined &&
+      t.fx_rate !== undefined;
     lines.push(
       toCsvRow([
         t.date,
@@ -92,6 +112,18 @@ export function transactionsToCsv(
           : "",
         t.payee,
         t.notes,
+        accountCurrency,
+        hasForeign
+          ? {
+              value: formatCurrencyInput(
+                t.original_amount!,
+                t.original_currency!,
+              ),
+              numeric: true,
+            }
+          : "",
+        hasForeign ? t.original_currency! : "",
+        hasForeign ? { value: formatFxRate(t.fx_rate!), numeric: true } : "",
       ]),
     );
   }

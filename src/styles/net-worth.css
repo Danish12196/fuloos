@@ -1,0 +1,250 @@
+/* Net Worth, Assets & Liabilities */
+.nw-page {
+  display: grid;
+  gap: 22px;
+}
+.nw-stats {
+  margin-bottom: 0;
+}
+.nw-chart-panel {
+  display: grid;
+  gap: 16px;
+}
+.nw-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.nw-range-pills {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--soft-surface);
+  border: 1px solid var(--line);
+}
+.nw-range-pills button {
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nw-range-pills button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.nw-svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.nw-svg {
+  width: 100%;
+  min-width: 440px;
+  height: 220px;
+  display: block;
+}
+.nw-chart-grid-line {
+  stroke: var(--line);
+  stroke-dasharray: 3 3;
+}
+.nw-chart-axis-text {
+  fill: var(--text-soft);
+  font-size: 11px;
+}
+.nw-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.nw-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.nw-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.nw-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.nw-filter-pills {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nw-filter-pills button {
+  padding: 7px 13px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nw-filter-pills button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.nw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 18px;
+}
+.nw-card {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+.nw-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.nw-title-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+.nw-symbol {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  flex: none;
+}
+.nw-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.nw-kind-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--soft-surface);
+  color: var(--text-soft);
+}
+.nw-kind-pill.asset {
+  background: #e5f2e8;
+  color: #1d5b48;
+}
+.nw-kind-pill.liability {
+  background: #fbeae7;
+  color: #b5524a;
+}
+[data-theme="dark"] .nw-kind-pill.asset {
+  background: #1d3b2c;
+  color: #9dd4b2;
+}
+[data-theme="dark"] .nw-kind-pill.liability {
+  background: #422523;
+  color: #ec958c;
+}
+.nw-card-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.nw-value-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.nw-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.nw-value.liability {
+  color: var(--terracotta, #b5524a);
+}
+.nw-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.nw-history-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.nw-history-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.nw-accounts-strip {
+  display: grid;
+  gap: 10px;
+}
+.nw-accounts-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.nw-account-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--soft-surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.nw-overview-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+}
+.nw-overview-metrics {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.nw-overview-metric small {
+  display: block;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.nw-overview-metric strong {
+  font-size: 18px;
+}

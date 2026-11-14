@@ -166,11 +166,36 @@
 }
 .tx-more {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 14px;
   padding: 16px;
   border-top: 1px solid var(--line);
+}
+.tx-pagination {
+  justify-content: space-between;
+}
+.tx-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.tx-page-size select {
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.tx-page-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.tx-page-nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
 }
 .sr-only {
   position: absolute;

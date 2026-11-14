@@ -1,4 +1,6 @@
+import { validateForeignCurrencyFields } from "./currency.ts";
 import { validateSplits, validateTags } from "./enrichment.ts";
+import type { NetWorthItem, NetWorthSnapshot } from "./netWorth.ts";
 
 export type AccountType =
   | "current"
@@ -27,6 +29,12 @@ export interface Account {
   opening_date: string;
   color: string;
   emoji?: string;
+  currency?: string;
+  credit_limit?: number;
+  statement_day?: number;
+  payment_due_day?: number;
+  apr_bps?: number;
+  minimum_payment?: number;
 }
 export interface Category {
   id: string;
@@ -69,6 +77,9 @@ export interface Transaction {
   tags?: string[];
   splits?: TransactionSplit[];
   receipt?: string;
+  original_amount?: number;
+  original_currency?: string;
+  fx_rate?: number;
 }
 export interface RecurringSchedule {
   id: string;
@@ -201,6 +212,8 @@ export interface Ledger {
   goal_contributions?: GoalContribution[];
   rules?: TransactionRule[];
   captured_alerts?: CapturedAlert[];
+  net_worth_items?: NetWorthItem[];
+  net_worth_snapshots?: NetWorthSnapshot[];
 }
 export const emptyLedger: Ledger = {
   accounts: [],
@@ -214,6 +227,8 @@ export const emptyLedger: Ledger = {
   goal_contributions: [],
   rules: [],
   captured_alerts: [],
+  net_worth_items: [],
+  net_worth_snapshots: [],
 };
 export function minor(value: string): number {
   if (!/^-?\d+(\.\d{1,2})?$/.test(value.trim()))
@@ -320,6 +335,7 @@ export function validateTransaction(
   if (t.splits !== undefined) {
     validateSplits(t.splits, t.amount, t.type, ledger.categories);
   }
+  validateForeignCurrencyFields(t);
   if (t.id && ledger.recurring_occurrences?.length) {
     const link = ledger.recurring_occurrences.find(
       (o) => o.transaction_id === t.id,

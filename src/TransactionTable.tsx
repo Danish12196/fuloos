@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowDownLeft,
   ArrowLeftRight,
   ArrowUp,
+  ChevronLeft,
+  ChevronRight,
   ChevronsUpDown,
   Paperclip,
   Pencil,
@@ -11,6 +13,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import { DEFAULT_CURRENCY, formatOriginalCurrencyPill } from "./currency";
 import { today, type Ledger, type Transaction } from "./domain";
 import { collectLedgerTags } from "./enrichment";
 import { downloadBlob, transactionsToCsv } from "./export";
@@ -29,7 +32,8 @@ import {
 import { useDensity } from "./density";
 import "./transactionTable.css";
 
-const PAGE = 200;
+const DEFAULT_PAGE_SIZE = 100;
+const PAGE_SIZE_OPTIONS = [50, 100, 250] as const;
 const amountFormat = new Intl.NumberFormat("en-AE", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
@@ -112,9 +116,25 @@ export function TransactionsPanel({
     key: "date",
     dir: "desc",
   });
-  const [limit, setLimit] = useState(PAGE);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [categorizing, setCategorizing] = useState<string | null>(null);
   const [density] = useDensity();
+
+  useEffect(() => {
+    setPage(1);
+  }, [
+    from,
+    to,
+    search,
+    accountFilter,
+    kindFilter,
+    categoryFilter,
+    tagFilter,
+    sort.key,
+    sort.dir,
+    pageSize,
+  ]);
 
   const ledgerTags = useMemo(() => collectLedgerTags(ledger), [ledger]);
   const account = ledger.accounts.find((a) => a.id === accountFilter);
@@ -139,11 +159,22 @@ export function TransactionsPanel({
       ),
     [register, ledger, from, to, search, kindFilter, categoryFilter, tagFilter, sort],
   );
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const startIdx = (currentPage - 1) * pageSize;
+  const shown = useMemo(
+    () => rows.slice(startIdx, startIdx + pageSize),
+    [rows, startIdx, pageSize],
+  );
   const visibleIds = useMemo(
     () => [...new Set(rows.map((r) => r.tx.id))],
     [rows],
   );
-  const selectedHere = visibleIds.filter((id) => selected.has(id)).length;
+  const pageIds = useMemo(
+    () => [...new Set(shown.map((r) => r.tx.id))],
+    [shown],
+  );
+  const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
   const showAccount = !account;
   const fmt = (v: number) => (hidden ? "••••" : amountFormat.format(v / 100));
 
@@ -256,15 +287,51 @@ export function TransactionsPanel({
     );
   };
 
-  const shown = rows.slice(0, limit);
-  const more = rows.length > limit && (
-    <div className="tx-more">
+  const endIdx = Math.min(startIdx + pageSize, rows.length);
+  const more = rows.length > 0 && (
+    <div className="tx-more tx-pagination">
       <span className="muted small">
-        Showing {limit} of {rows.length} rows
+        Showing {startIdx + 1}–{endIdx} of {rows.length}
       </span>
-      <button className="secondary" onClick={() => setLimit((l) => l + PAGE)}>
-        Show {Math.min(PAGE, rows.length - limit)} more
-      </button>
+      <label className="tx-page-size">
+        <span className="muted small">Rows</span>
+        <select
+          aria-label="Rows per page"
+          value={pageSize}
+          onChange={(e) => setPageSize(Number(e.target.value))}
+        >
+          {PAGE_SIZE_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+      </label>
+      {totalPages > 1 && (
+        <div className="tx-page-nav">
+          <button
+            type="button"
+            className="secondary"
+            aria-label="Previous page"
+            disabled={currentPage <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            <ChevronLeft size={15} /> Prev
+          </button>
+          <span className="muted small">
+            Page {currentPage} of {totalPages}
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            aria-label="Next page"
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            Next <ChevronRight size={15} />
+          </button>
+        </div>
+      )}
     </div>
   );
   const signed = (v: number) =>
@@ -345,6 +412,19 @@ export function TransactionsPanel({
         </span>
         <span className="tx-card-value">
           <b className={amount > 0 ? "is-in" : ""}>{signed(amount)}</b>
+          {t.original_currency &&
+            t.original_currency !== DEFAULT_CURRENCY &&
+            t.original_amount !== undefined && (
+              <span className="tag-badge fx-pill">
+                {hidden
+                  ? `${t.original_currency} ••••`
+                  : formatOriginalCurrencyPill(
+                      t.original_amount,
+                      t.original_currency,
+                      t.fx_rate,
+                    )}
+              </span>
+            )}
           <small className={e.balance < 0 ? "is-negative" : ""}>
             {account ? "Balance" : "Total"} {fmt(e.balance)}
           </small>
@@ -483,19 +563,13 @@ export function TransactionsPanel({
             aria-label="Search transactions"
             placeholder="Search payee, notes, category, amount…"
             value={search}
-            onChange={(e) => {
-              onSearch(e.target.value);
-              setLimit(PAGE);
-            }}
+            onChange={(e) => onSearch(e.target.value)}
           />
         </label>
         <select
           aria-label="Filter account"
           value={accountFilter}
-          onChange={(e) => {
-            onAccountFilter(e.target.value);
-            setLimit(PAGE);
-          }}
+          onChange={(e) => onAccountFilter(e.target.value)}
         >
           <option value="">All accounts</option>
           {ledger.accounts.map((a) => (
@@ -507,10 +581,7 @@ export function TransactionsPanel({
         <select
           aria-label="Filter type"
           value={kindFilter}
-          onChange={(e) => {
-            onKindFilter(e.target.value);
-            setLimit(PAGE);
-          }}
+          onChange={(e) => onKindFilter(e.target.value)}
         >
           <option value="">All types</option>
           <option value="expense">Expenses</option>
@@ -520,10 +591,7 @@ export function TransactionsPanel({
         <select
           aria-label="Filter category"
           value={categoryFilter}
-          onChange={(e) => {
-            setCategoryFilter(e.target.value);
-            setLimit(PAGE);
-          }}
+          onChange={(e) => setCategoryFilter(e.target.value)}
         >
           <option value="">All categories</option>
           <option value="uncategorized">Uncategorized</option>
@@ -537,10 +605,7 @@ export function TransactionsPanel({
           <select
             aria-label="Filter tag"
             value={tagFilter}
-            onChange={(e) => {
-              setTagFilter(e.target.value);
-              setLimit(PAGE);
-            }}
+            onChange={(e) => setTagFilter(e.target.value)}
           >
             <option value="">All tags</option>
             {ledgerTags.map((tag) => (
@@ -558,23 +623,25 @@ export function TransactionsPanel({
         <label className="selection-label">
           <input
             type="checkbox"
-            disabled={busy || loading || !visibleIds.length}
+            disabled={busy || loading || !pageIds.length}
             checked={
-              visibleIds.length > 0 && selectedHere === visibleIds.length
+              pageIds.length > 0 && selectedOnPage === pageIds.length
             }
             onChange={(e) => {
               const next = new Set(selected);
-              for (const id of visibleIds) {
+              for (const id of pageIds) {
                 if (e.target.checked) next.add(id);
                 else next.delete(id);
               }
               onSelectionChange(next);
             }}
           />
-          Select all {visibleIds.length} results
+          {totalPages > 1
+            ? `Select all ${pageIds.length} on page`
+            : `Select all ${pageIds.length} results`}
         </label>
         <span>
-          {selected.size} selected · {selectedHere} in these results
+          {selected.size} selected · {selectedOnPage} on this page
         </span>
         <button
           className="secondary"
@@ -688,9 +755,55 @@ export function TransactionsPanel({
                     <td className="tx-text" title={entryCategory(e, ledger)}>
                       {categoryCell(e)}
                     </td>
-                    <td className="num">{e.payment ? fmt(e.payment) : ""}</td>
+                    <td className="num">
+                      {e.payment ? (
+                        <>
+                          <span>{fmt(e.payment)}</span>
+                          {t.original_currency &&
+                            t.original_currency !== DEFAULT_CURRENCY &&
+                            t.original_amount !== undefined && (
+                              <span
+                                className="tag-badge fx-pill"
+                                style={{ marginLeft: 6 }}
+                              >
+                                {hidden
+                                  ? `${t.original_currency} ••••`
+                                  : formatOriginalCurrencyPill(
+                                      t.original_amount,
+                                      t.original_currency,
+                                      t.fx_rate,
+                                    )}
+                              </span>
+                            )}
+                        </>
+                      ) : (
+                        ""
+                      )}
+                    </td>
                     <td className="num tx-deposit">
-                      {e.deposit ? fmt(e.deposit) : ""}
+                      {e.deposit ? (
+                        <>
+                          <span>{fmt(e.deposit)}</span>
+                          {t.original_currency &&
+                            t.original_currency !== DEFAULT_CURRENCY &&
+                            t.original_amount !== undefined && (
+                              <span
+                                className="tag-badge fx-pill"
+                                style={{ marginLeft: 6 }}
+                              >
+                                {hidden
+                                  ? `${t.original_currency} ••••`
+                                  : formatOriginalCurrencyPill(
+                                      t.original_amount,
+                                      t.original_currency,
+                                      t.fx_rate,
+                                    )}
+                              </span>
+                            )}
+                        </>
+                      ) : (
+                        ""
+                      )}
                     </td>
                     <td
                       className={`num tx-balance ${e.balance < 0 ? "is-negative" : ""}`}

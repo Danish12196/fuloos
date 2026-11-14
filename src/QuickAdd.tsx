@@ -9,6 +9,15 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
+import {
+  convertToAedFils,
+  DEFAULT_CURRENCY,
+  getReferenceFxRate,
+  normalizeCurrencyCode,
+  parseCurrencyMinor,
+  REFERENCE_RATES_NOTE,
+  SUPPORTED_CURRENCIES,
+} from "./currency";
 import { errorMessage, today, type Ledger } from "./domain";
 import { collectLedgerTags } from "./enrichment";
 import { TagInput } from "./TagInput";
@@ -50,10 +59,26 @@ export function QuickAddModal({
     initialDraft?.type ?? "expense",
   );
   const [amount, setAmount] = useState(initialDraft?.amount ?? "");
-  const [accountId, setAccountId] = useState(() =>
-    pickDefaultAccountId(
-      ledger.accounts,
-      initialDraft?.accountId ?? readRememberedAccount(),
+  const initialAccountId = pickDefaultAccountId(
+    ledger.accounts,
+    initialDraft?.accountId ?? readRememberedAccount(),
+  );
+  const initialAccCurrency = normalizeCurrencyCode(
+    ledger.accounts.find((a) => a.id === initialAccountId)?.currency,
+  );
+  const [accountId, setAccountId] = useState(initialAccountId);
+  const [foreignEnabled, setForeignEnabled] = useState(
+    initialAccCurrency !== DEFAULT_CURRENCY,
+  );
+  const [originalCurrency, setOriginalCurrency] = useState(
+    initialAccCurrency !== DEFAULT_CURRENCY ? initialAccCurrency : "USD",
+  );
+  const [originalAmount, setOriginalAmount] = useState("");
+  const [fxRate, setFxRate] = useState(
+    String(
+      getReferenceFxRate(
+        initialAccCurrency !== DEFAULT_CURRENCY ? initialAccCurrency : "USD",
+      ),
     ),
   );
   const [categoryId, setCategoryId] = useState(initialDraft?.categoryId ?? "");
@@ -79,6 +104,24 @@ export function QuickAddModal({
 
   const offlineLocked = !online && !demo;
 
+  function syncAedFromForeign(
+    nextOrig: string,
+    nextCurr: string,
+    nextRate: string,
+  ) {
+    try {
+      if (!nextOrig.trim()) return;
+      const origMinor = parseCurrencyMinor(nextOrig, nextCurr);
+      const rate = Number(nextRate);
+      if (origMinor >= 0 && Number.isFinite(rate) && rate > 0) {
+        const aedFils = convertToAedFils(origMinor, nextCurr, rate);
+        setAmount((aedFils / 100).toFixed(2));
+      }
+    } catch {
+      // Allow incomplete typing while editing.
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError("");
@@ -87,6 +130,22 @@ export function QuickAddModal({
       return;
     }
     try {
+      let foreignFields: Record<string, unknown> = {};
+      if (foreignEnabled) {
+        if (!originalAmount.trim()) {
+          throw new Error("Enter the original currency amount.");
+        }
+        const origMinor = parseCurrencyMinor(originalAmount, originalCurrency);
+        const rate = Number(fxRate);
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new Error("Enter an exchange rate greater than zero.");
+        }
+        foreignFields = {
+          original_currency: originalCurrency,
+          original_amount: origMinor,
+          fx_rate: rate,
+        };
+      }
       const record = buildQuickAddTransaction(
         { type, amount, accountId, categoryId, payee, date },
         ledger,
@@ -94,6 +153,7 @@ export function QuickAddModal({
       saveRememberedAccount(accountId);
       await onSave("transactions", {
         ...record,
+        ...foreignFields,
         ...(tags.length > 0 ? { tags } : {}),
       });
       onClose();
@@ -194,18 +254,118 @@ export function QuickAddModal({
             />
           </label>
 
+          <div className="enrichment-section">
+            <div className="enrichment-section-head">
+              <label className="selection-label">
+                <input
+                  type="checkbox"
+                  checked={foreignEnabled}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setForeignEnabled(checked);
+                    if (checked) {
+                      syncAedFromForeign(originalAmount, originalCurrency, fxRate);
+                    }
+                  }}
+                />
+                <span>Foreign currency</span>
+              </label>
+              {foreignEnabled && (
+                <span className="muted small">Explicit FX to AED</span>
+              )}
+            </div>
+            {foreignEnabled && (
+              <>
+                <div className="form-row">
+                  <label>
+                    Currency
+                    <select
+                      name="original_currency"
+                      value={originalCurrency}
+                      disabled={busy}
+                      onChange={(e) => {
+                        const nextCurr = e.target.value;
+                        const nextRate = String(getReferenceFxRate(nextCurr));
+                        setOriginalCurrency(nextCurr);
+                        setFxRate(nextRate);
+                        syncAedFromForeign(originalAmount, nextCurr, nextRate);
+                      }}
+                    >
+                      {SUPPORTED_CURRENCIES.filter(
+                        (c) => c.code !== DEFAULT_CURRENCY,
+                      ).map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.code} — {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Original ({originalCurrency})
+                    <input
+                      name="original_amount"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={originalAmount}
+                      disabled={busy}
+                      onChange={(e) => {
+                        const nextOrig = e.target.value;
+                        setOriginalAmount(nextOrig);
+                        syncAedFromForeign(nextOrig, originalCurrency, fxRate);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Rate to AED
+                    <input
+                      name="fx_rate"
+                      inputMode="decimal"
+                      placeholder="3.6725"
+                      value={fxRate}
+                      disabled={busy}
+                      onChange={(e) => {
+                        const nextRate = e.target.value;
+                        setFxRate(nextRate);
+                        syncAedFromForeign(
+                          originalAmount,
+                          originalCurrency,
+                          nextRate,
+                        );
+                      }}
+                    />
+                  </label>
+                </div>
+                <p className="form-hint">{REFERENCE_RATES_NOTE}</p>
+              </>
+            )}
+          </div>
+
           <div className="form-row">
             <label>
               Account
               <select
                 name="account_id"
                 value={accountId}
-                onChange={(e) => setAccountId(e.target.value)}
+                onChange={(e) => {
+                  const nextId = e.target.value;
+                  setAccountId(nextId);
+                  const acc = ledger.accounts.find((a) => a.id === nextId);
+                  const accCurr = normalizeCurrencyCode(acc?.currency);
+                  if (accCurr !== DEFAULT_CURRENCY) {
+                    const nextRate = String(getReferenceFxRate(accCurr));
+                    setForeignEnabled(true);
+                    setOriginalCurrency(accCurr);
+                    setFxRate(nextRate);
+                    syncAedFromForeign(originalAmount, accCurr, nextRate);
+                  }
+                }}
               >
                 {ledger.accounts.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.emoji ? `${a.emoji} ` : ""}
                     {a.name}
+                    {a.currency && a.currency !== "AED" ? ` (${a.currency})` : ""}
                   </option>
                 ))}
               </select>

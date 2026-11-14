@@ -18,6 +18,7 @@ import {
 } from "./domain";
 import { ACCOUNT_TYPES, type EditorModalState } from "./EditorModal";
 import { DashboardGoals } from "./GoalsView";
+import { DashboardNetWorth } from "./NetWorthView";
 import { DashboardRecurring, type RecurringTab } from "./RecurringView";
 import { Empty, TransactionList } from "./TransactionList";
 
@@ -67,7 +68,8 @@ export function OverviewPage({
       | "Accounts"
       | "Reports"
       | "Recurring"
-      | "Goals",
+      | "Goals"
+      | "Net Worth",
   ) => void;
   onSelectAccount: (accountId: string) => void;
   onOpenModal: (modal: EditorModalState) => void;
@@ -281,6 +283,11 @@ export function OverviewPage({
         onOpenGoals={() => onNavigate("Goals")}
         onAddGoal={onAddGoal}
         onContributeGoal={onContributeGoal}
+      />
+      <DashboardNetWorth
+        ledger={ledger}
+        concealed={concealed}
+        onOpenNetWorth={() => onNavigate("Net Worth")}
       />
     </>
   );

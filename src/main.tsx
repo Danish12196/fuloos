@@ -45,11 +45,20 @@ const ReportsPage = lazy(() =>
 const GoalsPage = lazy(() =>
   import("./GoalsView").then((m) => ({ default: m.GoalsPage })),
 );
+const NetWorthPage = lazy(() =>
+  import("./NetWorthView").then((m) => ({ default: m.NetWorthPage })),
+);
 import {
   GoalContributeModal,
   GoalEditorModal,
   type GoalDraft,
 } from "./GoalsView";
+import {
+  NetWorthItemEditorModal,
+  NetWorthValuationModal,
+  type NetWorthItemDraft,
+} from "./NetWorthView";
+import type { NetWorthItem, NetWorthSnapshot } from "./netWorth";
 import { applyContributionAmount } from "./goals";
 import { useRecurringActions } from "./useRecurringActions";
 import { useDeletionActions } from "./useDeletionActions";
@@ -165,6 +174,12 @@ function App() {
   } | null>(null);
   const [goalContributeTarget, setGoalContributeTarget] =
     useState<SavingsGoal | null>(null);
+  const [netWorthModal, setNetWorthModal] = useState<{
+    open: true;
+    item?: NetWorthItem;
+  } | null>(null);
+  const [netWorthValuationTarget, setNetWorthValuationTarget] =
+    useState<NetWorthItem | null>(null);
   const online = useOnlineStatus();
   const { canInstall, promptInstall } = useInstallPrompt();
   const [swUpdate, setSwUpdate] = useState<(() => void) | null>(null);
@@ -815,6 +830,170 @@ function App() {
       setBusy(false);
     }
   }
+  async function saveNetWorthItem(draft: NetWorthItemDraft, id?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      if (demo) {
+        const saved: NetWorthItem = { ...draft, id: id ?? demoId() };
+        const initialSnap: NetWorthSnapshot | null = id
+          ? null
+          : {
+              id: demoId(),
+              item_id: saved.id,
+              value: saved.current_value,
+              date: saved.as_of_date,
+              notes: "Initial valuation",
+            };
+        setLedger((l) => ({
+          ...l,
+          net_worth_items: id
+            ? (l.net_worth_items ?? []).map((i) => (i.id === id ? saved : i))
+            : [...(l.net_worth_items ?? []), saved],
+          net_worth_snapshots: initialSnap
+            ? [...(l.net_worth_snapshots ?? []), initialSnap]
+            : l.net_worth_snapshots,
+        }));
+        setNetWorthModal(null);
+        return;
+      }
+      if (!backend || !session) throw new Error("Please sign in.");
+      const current = generation.current;
+      const saved = await backend.save("net_worth_items", draft, id);
+      let initialSnap: NetWorthSnapshot | null = null;
+      if (!id) {
+        initialSnap = await backend.save("net_worth_snapshots", {
+          item_id: saved.id,
+          value: saved.current_value,
+          date: saved.as_of_date,
+          notes: "Initial valuation",
+        });
+      }
+      if (current !== generation.current) return;
+      setLedger((l) => ({
+        ...l,
+        net_worth_items: id
+          ? (l.net_worth_items ?? []).map((i) => (i.id === id ? saved : i))
+          : [...(l.net_worth_items ?? []), saved],
+        net_worth_snapshots: initialSnap
+          ? [...(l.net_worth_snapshots ?? []), initialSnap]
+          : l.net_worth_snapshots,
+      }));
+      setNetWorthModal(null);
+    } catch (e) {
+      setError(errorMessage(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteNetWorthItem(item: NetWorthItem) {
+    setBusy(true);
+    setError("");
+    try {
+      if (!demo) {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
+        await backend.remove("net_worth_items", item.id);
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        net_worth_items: (l.net_worth_items ?? []).filter(
+          (i) => i.id !== item.id,
+        ),
+        net_worth_snapshots: (l.net_worth_snapshots ?? []).filter(
+          (s) => s.item_id !== item.id,
+        ),
+      }));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function updateNetWorthValuation(
+    item: NetWorthItem,
+    value: number,
+    date: string,
+    notes: string,
+  ) {
+    setBusy(true);
+    setError("");
+    try {
+      const nextAsOf = date >= item.as_of_date ? date : item.as_of_date;
+      const nextVal = date >= item.as_of_date ? value : item.current_value;
+      if (demo) {
+        const snap: NetWorthSnapshot = {
+          id: demoId(),
+          item_id: item.id,
+          value,
+          date,
+          notes,
+        };
+        setLedger((l) => ({
+          ...l,
+          net_worth_snapshots: [...(l.net_worth_snapshots ?? []), snap],
+          net_worth_items: (l.net_worth_items ?? []).map((i) =>
+            i.id === item.id
+              ? { ...i, current_value: nextVal, as_of_date: nextAsOf }
+              : i,
+          ),
+        }));
+        setNetWorthValuationTarget(null);
+        return;
+      }
+      if (!backend || !session) throw new Error("Please sign in.");
+      const current = generation.current;
+      const snap = await backend.save("net_worth_snapshots", {
+        item_id: item.id,
+        value,
+        date,
+        notes,
+      });
+      const updated = await backend.save(
+        "net_worth_items",
+        { current_value: nextVal, as_of_date: nextAsOf },
+        item.id,
+      );
+      if (current !== generation.current) return;
+      setLedger((l) => ({
+        ...l,
+        net_worth_snapshots: [...(l.net_worth_snapshots ?? []), snap],
+        net_worth_items: (l.net_worth_items ?? []).map((i) =>
+          i.id === item.id ? updated : i,
+        ),
+      }));
+      setNetWorthValuationTarget(null);
+    } catch (e) {
+      setError(errorMessage(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteNetWorthSnapshot(snap: NetWorthSnapshot) {
+    setBusy(true);
+    setError("");
+    try {
+      if (!demo) {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
+        await backend.remove("net_worth_snapshots", snap.id);
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        net_worth_snapshots: (l.net_worth_snapshots ?? []).filter(
+          (s) => s.id !== snap.id,
+        ),
+      }));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function restoreBackup(backup: FuloosBackup, mode: RestoreMode) {
     const { presets: existingPresets } = await presetStore.load();
     if (demo) {
@@ -1245,6 +1424,8 @@ function App() {
                 setBudgetModal({ draft: { start_month: month } });
               } else if (page === "Goals") {
                 setGoalModal({ open: true });
+              } else if (page === "Net Worth") {
+                setNetWorthModal({ open: true });
               } else {
                 setModal({
                   kind:
@@ -1560,6 +1741,26 @@ function App() {
             if (!busy) setGoalContributeTarget(null);
           }}
           onSubmit={contributeToGoal}
+        />
+      )}
+      {netWorthModal && (
+        <NetWorthItemEditorModal
+          item={netWorthModal.item}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setNetWorthModal(null);
+          }}
+          onSave={saveNetWorthItem}
+        />
+      )}
+      {netWorthValuationTarget && (
+        <NetWorthValuationModal
+          item={netWorthValuationTarget}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setNetWorthValuationTarget(null);
+          }}
+          onSave={updateNetWorthValuation}
         />
       )}
       <QuickAddFab disabled={busy} onClick={() => setQuickAdd({})} />

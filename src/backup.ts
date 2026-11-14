@@ -1,5 +1,10 @@
 import type { PocketBaseBackend } from "./backend.ts";
 import { budgetsOverlap, isMonth, MAX_BUDGET_AMOUNT } from "./budgets.ts";
+import {
+  isSupportedCurrency,
+  normalizeCurrencyCode,
+  validateForeignCurrencyFields,
+} from "./currency.ts";
 import { normalizeSplits, normalizeTags } from "./enrichment.ts";
 import {
   parsePresetEntry,
@@ -326,6 +331,17 @@ export function parseAndValidateBackup(rawText: string): {
     );
     const color = requireColor(raw.color, `Account "${name}" color`);
     const emoji = optionalEmoji(raw.emoji, `Account "${name}"`);
+    let currency: string | undefined;
+    if (
+      raw.currency !== undefined &&
+      raw.currency !== null &&
+      raw.currency !== ""
+    ) {
+      if (typeof raw.currency !== "string" || !isSupportedCurrency(raw.currency)) {
+        fail(`Account "${name}" has an unsupported currency.`);
+      }
+      currency = normalizeCurrencyCode(raw.currency);
+    }
     return {
       id,
       name,
@@ -334,6 +350,7 @@ export function parseAndValidateBackup(rawText: string): {
       opening_date,
       color,
       ...(emoji ? { emoji } : {}),
+      ...(currency ? { currency } : {}),
     };
   });
 
@@ -453,6 +470,38 @@ export function parseAndValidateBackup(rawText: string): {
         }
       }
 
+      let foreignFields:
+        | { original_currency: string; original_amount: number; fx_rate: number }
+        | undefined;
+      if (
+        raw.original_currency !== undefined &&
+        raw.original_currency !== null &&
+        raw.original_currency !== ""
+      ) {
+        if (typeof raw.original_currency !== "string") {
+          fail(`Transaction #${i + 1} has an invalid original_currency.`);
+        }
+        const oc = normalizeCurrencyCode(raw.original_currency);
+        if (oc !== "AED") {
+          try {
+            validateForeignCurrencyFields({
+              original_currency: oc,
+              original_amount: raw.original_amount as number,
+              fx_rate: raw.fx_rate as number,
+            });
+          } catch (err) {
+            fail(
+              `Transaction #${i + 1}: ${err instanceof Error ? err.message : "Invalid foreign currency fields."}`,
+            );
+          }
+          foreignFields = {
+            original_currency: oc,
+            original_amount: raw.original_amount as number,
+            fx_rate: raw.fx_rate as number,
+          };
+        }
+      }
+
       const tx: Transaction = {
         id,
         type,
@@ -465,6 +514,7 @@ export function parseAndValidateBackup(rawText: string): {
         notes,
         ...(tags && tags.length > 0 ? { tags } : {}),
         ...(splits && splits.length > 0 ? { splits } : {}),
+        ...(foreignFields ?? {}),
       };
       txById.set(id, tx);
       return tx;
@@ -817,6 +867,9 @@ function transactionFingerprint(t: Omit<Transaction, "id">): string {
     t.category_id ?? null,
     t.payee,
     t.notes,
+    t.original_currency ?? null,
+    t.original_amount ?? null,
+    t.fx_rate ?? null,
   ]);
 }
 
@@ -1034,6 +1087,13 @@ export async function executeRestore(params: {
                 ? (categoryIdMap.get(s.category_id) ?? s.category_id)
                 : null,
             })),
+          }
+        : {}),
+      ...(t.original_currency && t.original_currency !== "AED"
+        ? {
+            original_currency: t.original_currency,
+            original_amount: t.original_amount,
+            fx_rate: t.fx_rate,
           }
         : {}),
     };
