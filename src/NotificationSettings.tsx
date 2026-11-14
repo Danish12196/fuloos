@@ -1,11 +1,22 @@
-import { useEffect, useRef, useState } from "react";
-import { Bell, Mail } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Bell, Mail, Smartphone } from "lucide-react";
+import type { PushSubscriptionRecord } from "./backend";
 import {
   defaultNotificationPreferences,
   errorMessage,
   type DigestDay,
   type NotificationPreferences,
 } from "./domain";
+import {
+  deriveWebPushStatus,
+  getExistingPushSubscription,
+  getNotificationPermission,
+  getVapidPublicKey,
+  isWebPushSupported,
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+  type PushSubscriptionPayload,
+} from "./webPush";
 import "./styles/notifications.css";
 
 const DIGEST_DAYS: { value: DigestDay; label: string }[] = [
@@ -41,6 +52,10 @@ export function NotificationSettings({
   onLoadPrefs,
   onSavePrefs,
   onSendTestEmail,
+  onLoadPushSubscriptions,
+  onSavePushSubscription,
+  onDeletePushSubscription,
+  onSendTestPush,
 }: {
   demo: boolean;
   userEmail?: string;
@@ -53,6 +68,15 @@ export function NotificationSettings({
     prefs: NotificationPreferences,
   ) => Promise<NotificationPreferences>;
   onSendTestEmail?: () => Promise<{ ok: boolean; message: string }>;
+  onLoadPushSubscriptions?: () => Promise<{
+    subscriptions: PushSubscriptionRecord[];
+    supported: boolean;
+  }>;
+  onSavePushSubscription?: (
+    sub: PushSubscriptionPayload,
+  ) => Promise<PushSubscriptionRecord>;
+  onDeletePushSubscription?: (id: string) => Promise<void>;
+  onSendTestPush?: () => Promise<{ ok: boolean; message: string }>;
 }) {
   const [prefs, setPrefs] = useState<NotificationPreferences>(() =>
     demo ? { ...demoNotificationPrefs } : { ...defaultNotificationPreferences },
@@ -66,6 +90,16 @@ export function NotificationSettings({
   const [supported, setSupported] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testingPush, setTestingPush] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushServerSupported, setPushServerSupported] = useState(true);
+  const [pushSubscriptions, setPushSubscriptions] = useState<
+    PushSubscriptionRecord[]
+  >([]);
+  const [browserEndpoint, setBrowserEndpoint] = useState<string | null>(null);
+  const [permission, setPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(() => getNotificationPermission());
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
@@ -77,12 +111,22 @@ export function NotificationSettings({
     let active = true;
     setLoading(true);
     setError("");
-    onLoadPrefs()
-      .then((res) => {
+    Promise.all([
+      onLoadPrefs(),
+      onLoadPushSubscriptions
+        ? onLoadPushSubscriptions()
+        : Promise.resolve({ subscriptions: [], supported: false }),
+      getExistingPushSubscription(),
+    ])
+      .then(([res, pushRes, browserSub]) => {
         if (!active) return;
         setPrefs(res.prefs);
         setSavedSnapshot(JSON.stringify(res.prefs));
         setSupported(res.supported);
+        setPushServerSupported(pushRes.supported);
+        setPushSubscriptions(pushRes.subscriptions);
+        setBrowserEndpoint(browserSub?.endpoint ?? null);
+        setPermission(getNotificationPermission());
       })
       .catch((e) => {
         if (!active) return;
@@ -94,10 +138,26 @@ export function NotificationSettings({
     return () => {
       active = false;
     };
-  }, [demo, onLoadPrefs]);
+  }, [demo, onLoadPrefs, onLoadPushSubscriptions]);
 
   const dirty = JSON.stringify(prefs) !== savedSnapshot;
-  const disabled = Boolean(busy || loading || saving || testing || !supported);
+  const disabled = Boolean(
+    busy || loading || saving || testing || testingPush || pushBusy || !supported,
+  );
+  const pushChannelEnabled = Boolean(prefs.channels?.push);
+  const anyChannelEnabled = prefs.email_enabled || pushChannelEnabled;
+  const vapidConfigured = getVapidPublicKey() !== null;
+  const browserSupported = isWebPushSupported();
+  const isBrowserSubscribed = Boolean(
+    browserEndpoint &&
+      pushSubscriptions.some((s) => s.endpoint === browserEndpoint),
+  );
+  const pushStatus = deriveWebPushStatus({
+    supported: browserSupported && pushServerSupported,
+    vapidConfigured,
+    permission,
+    subscribed: isBrowserSubscribed,
+  });
 
   function update(patch: Partial<NotificationPreferences>) {
     setStatus("");
@@ -143,6 +203,68 @@ export function NotificationSettings({
     }
   }
 
+  async function handleToggleBrowserPush(enable: boolean) {
+    if (demo) return;
+    setError("");
+    setStatus("");
+    setPushBusy(true);
+    try {
+      if (enable) {
+        if (!onSavePushSubscription) return;
+        const payload = await subscribeToWebPush();
+        const savedSub = await onSavePushSubscription(payload);
+        setPushSubscriptions((prev) => [
+          ...prev.filter((s) => s.endpoint !== savedSub.endpoint),
+          savedSub,
+        ]);
+        setBrowserEndpoint(savedSub.endpoint);
+        setPermission(getNotificationPermission());
+        if (!prefs.channels?.push && onSavePrefs) {
+          const nextPrefs: NotificationPreferences = {
+            ...prefs,
+            channels: { ...(prefs.channels ?? {}), push: true },
+          };
+          const savedPrefs = await onSavePrefs(nextPrefs);
+          setPrefs(savedPrefs);
+          setSavedSnapshot(JSON.stringify(savedPrefs));
+        }
+        setStatus("Push notifications enabled for this browser.");
+      } else {
+        const removedEndpoint = await unsubscribeFromWebPush();
+        const match = pushSubscriptions.find(
+          (s) => s.endpoint === (removedEndpoint || browserEndpoint),
+        );
+        if (match && onDeletePushSubscription) {
+          await onDeletePushSubscription(match.id);
+          setPushSubscriptions((prev) => prev.filter((s) => s.id !== match.id));
+        }
+        setBrowserEndpoint(null);
+        setPermission(getNotificationPermission());
+        setStatus("Push notifications disabled for this browser.");
+      }
+    } catch (e) {
+      setPermission(getNotificationPermission());
+      setError(errorMessage(e));
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function handleTestPush() {
+    if (demo || !onSendTestPush) return;
+    setError("");
+    setStatus("");
+    setTestingPush(true);
+    try {
+      const res = await onSendTestPush();
+      setStatus(res.message || "Test push notification sent.");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setTestingPush(false);
+    }
+  }
+
   return (
     <section
       className="notifications-settings"
@@ -152,15 +274,15 @@ export function NotificationSettings({
         <h3 id="notifications-heading">Notifications</h3>
         <p className="muted small">
           {demo
-            ? "Demo mode: preferences are kept in memory only and no emails are sent."
-            : `Opt-in email alerts${userEmail ? ` sent to ${userEmail}` : ""}. All alerts start off until you enable them.`}
+            ? "Demo mode: preferences are kept in memory only and no emails or push alerts are sent."
+            : `Opt-in email${userEmail ? ` (${userEmail})` : ""} and Web Push alerts. All alerts start off until you enable them.`}
         </p>
       </div>
 
       {!supported && !demo && (
         <p className="muted small" role="status">
           Notifications are not installed on the server yet. Apply the
-          notifications migration and hooks to enable email alerts.
+          notifications migration and hooks to enable alerts.
         </p>
       )}
 
@@ -185,13 +307,89 @@ export function NotificationSettings({
         />
       </label>
 
+      <label className="notifications-master">
+        <span>
+          <Smartphone
+            size={14}
+            style={{ verticalAlign: "-2px", marginRight: 6 }}
+          />
+          Push notifications (account preference)
+        </span>
+        <input
+          type="checkbox"
+          checked={pushChannelEnabled}
+          disabled={disabled}
+          onChange={(e) =>
+            update({
+              channels: {
+                ...(prefs.channels ?? {}),
+                push: e.target.checked,
+              },
+            })
+          }
+        />
+      </label>
+
+      <label className="notifications-master">
+        <span>
+          <Smartphone
+            size={14}
+            style={{ verticalAlign: "-2px", marginRight: 6 }}
+          />
+          Push notifications (this browser)
+        </span>
+        <span className="notifications-master-meta">
+          <span
+            className={`notifications-badge${
+              pushStatus === "subscribed"
+                ? " is-ok"
+                : pushStatus === "denied"
+                  ? " is-warn"
+                  : ""
+            }`}
+          >
+            {demo
+              ? "Demo"
+              : pushStatus === "subscribed"
+                ? "Subscribed"
+                : pushStatus === "denied"
+                  ? "Permission denied"
+                  : pushStatus === "not_configured"
+                    ? "Not configured"
+                    : "Not subscribed"}
+          </span>
+          <input
+            type="checkbox"
+            checked={isBrowserSubscribed}
+            disabled={
+              demo ||
+              disabled ||
+              !pushServerSupported ||
+              !browserSupported ||
+              !vapidConfigured
+            }
+            onChange={(e) => void handleToggleBrowserPush(e.target.checked)}
+          />
+        </span>
+      </label>
+
+      {!demo && pushStatus === "not_configured" && (
+        <p className="muted small">
+          {!browserSupported
+            ? "This browser does not support Web Push notifications."
+            : !pushServerSupported
+              ? "Web Push migration is not installed on the PocketBase server yet."
+              : "Web Push is not configured in this build (VITE_VAPID_PUBLIC_KEY is missing)."}
+        </p>
+      )}
+
       <div className="notifications-events">
         <div className="notifications-row">
           <label>
             <input
               type="checkbox"
               checked={prefs.upcoming_bill_enabled}
-              disabled={disabled || !prefs.email_enabled}
+              disabled={disabled || !anyChannelEnabled}
               onChange={(e) =>
                 update({ upcoming_bill_enabled: e.target.checked })
               }
@@ -206,7 +404,7 @@ export function NotificationSettings({
               aria-label="Days before bill due"
               value={prefs.upcoming_bill_days}
               disabled={
-                disabled || !prefs.email_enabled || !prefs.upcoming_bill_enabled
+                disabled || !anyChannelEnabled || !prefs.upcoming_bill_enabled
               }
               onChange={(e) => {
                 const val = Math.max(
@@ -225,7 +423,7 @@ export function NotificationSettings({
             <input
               type="checkbox"
               checked={prefs.overdue_enabled}
-              disabled={disabled || !prefs.email_enabled}
+              disabled={disabled || !anyChannelEnabled}
               onChange={(e) => update({ overdue_enabled: e.target.checked })}
             />
             <span>Overdue recurring occurrence</span>
@@ -237,7 +435,7 @@ export function NotificationSettings({
             <input
               type="checkbox"
               checked={prefs.budget_80_enabled}
-              disabled={disabled || !prefs.email_enabled}
+              disabled={disabled || !anyChannelEnabled}
               onChange={(e) => update({ budget_80_enabled: e.target.checked })}
             />
             <span>Monthly budget reaches 80%</span>
@@ -249,7 +447,7 @@ export function NotificationSettings({
             <input
               type="checkbox"
               checked={prefs.budget_100_enabled}
-              disabled={disabled || !prefs.email_enabled}
+              disabled={disabled || !anyChannelEnabled}
               onChange={(e) => update({ budget_100_enabled: e.target.checked })}
             />
             <span>Monthly budget exceeds 100%</span>
@@ -261,7 +459,7 @@ export function NotificationSettings({
             <input
               type="checkbox"
               checked={prefs.weekly_digest_enabled}
-              disabled={disabled || !prefs.email_enabled}
+              disabled={disabled || !anyChannelEnabled}
               onChange={(e) =>
                 update({ weekly_digest_enabled: e.target.checked })
               }
@@ -273,7 +471,7 @@ export function NotificationSettings({
               aria-label="Weekly digest day"
               value={prefs.digest_day}
               disabled={
-                disabled || !prefs.email_enabled || !prefs.weekly_digest_enabled
+                disabled || !anyChannelEnabled || !prefs.weekly_digest_enabled
               }
               onChange={(e) =>
                 update({ digest_day: e.target.value as DigestDay })
@@ -328,6 +526,17 @@ export function NotificationSettings({
         >
           <Mail size={14} />
           {testing ? "Sending…" : "Send test email"}
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={
+            demo || disabled || pushStatus !== "subscribed" || !onSendTestPush
+          }
+          onClick={() => void handleTestPush()}
+        >
+          <Smartphone size={14} />
+          {testingPush ? "Sending…" : "Send test push"}
         </button>
       </div>
 

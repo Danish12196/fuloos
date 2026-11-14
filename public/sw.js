@@ -105,3 +105,96 @@ self.addEventListener("fetch", (event) => {
     }),
   );
 });
+
+function parsePushPayload(event) {
+  const fallback = {
+    title: "Fuloos",
+    body: "You have a new financial alert.",
+    url: "/?settings=notifications",
+    tag: "fuloos-alert",
+  };
+  if (!event || !event.data) return fallback;
+  try {
+    const parsed = event.data.json();
+    if (parsed && typeof parsed === "object") {
+      return {
+        title:
+          typeof parsed.title === "string" && parsed.title.trim()
+            ? parsed.title.trim().slice(0, 120)
+            : fallback.title,
+        body:
+          typeof parsed.body === "string" && parsed.body.trim()
+            ? parsed.body.trim().slice(0, 240)
+            : fallback.body,
+        url:
+          typeof parsed.url === "string" && parsed.url.startsWith("/")
+            ? parsed.url
+            : fallback.url,
+        tag:
+          typeof parsed.tag === "string" && parsed.tag.trim()
+            ? parsed.tag.trim().slice(0, 64)
+            : fallback.tag,
+      };
+    }
+  } catch {
+    try {
+      const text = event.data.text();
+      if (typeof text === "string" && text.trim()) {
+        return {
+          ...fallback,
+          body: text.trim().slice(0, 240),
+        };
+      }
+    } catch {
+      // Ignore malformed push payload
+    }
+  }
+  return fallback;
+}
+
+self.addEventListener("push", (event) => {
+  const payload = parsePushPayload(event);
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag: payload.tag,
+      data: { url: payload.url },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const rawUrl =
+    event.notification &&
+    event.notification.data &&
+    typeof event.notification.data.url === "string"
+      ? event.notification.data.url
+      : "/";
+  const targetPath = rawUrl.startsWith("/") ? rawUrl : "/";
+  const targetUrl = new URL(targetPath, self.location.origin).href;
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((windowClients) => {
+        for (const client of windowClients) {
+          if (client.url.startsWith(self.location.origin) && "focus" in client) {
+            return client.focus().then((focused) => {
+              if (focused && "navigate" in focused && focused.url !== targetUrl) {
+                return focused.navigate(targetUrl).catch(() => focused);
+              }
+              return focused;
+            });
+          }
+        }
+        if (self.clients.openWindow) {
+          return self.clients.openWindow(targetUrl);
+        }
+        return undefined;
+      }),
+  );
+});
+

@@ -111,6 +111,7 @@ import {
 } from "./pwa";
 import { PwaBanners, QuickAddFab, QuickAddModal } from "./QuickAdd";
 import { parseQuickAddUrl, type QuickAddDraft } from "./quickAdd";
+import { LocaleProvider, useLocale } from "./i18n";
 function demoId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64;
@@ -123,6 +124,7 @@ function demoId() {
 }
 type Modal = EditorModalState;
 function App() {
+  const { t } = useLocale();
   const [session, setSession] = useState<Session | null>(null),
     [checking, setChecking] = useState(!!backend),
     [demo, setDemo] = useState(false),
@@ -1642,8 +1644,8 @@ function App() {
           )}
           <footer>
             <Leaf size={14} />
-            <span>A little more clarity. A little less worry.</span>
-            <span className="footer-brand">Made for your everyday.</span>
+            <span>{t("footer.tagline")}</span>
+            <span className="footer-brand">{t("footer.brand")}</span>
           </footer>
         </div>
       </main>
@@ -1781,7 +1783,9 @@ function App() {
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
-    <ConfirmHost />
+    <LocaleProvider>
+      <App />
+      <ConfirmHost />
+    </LocaleProvider>
   </React.StrictMode>,
 );

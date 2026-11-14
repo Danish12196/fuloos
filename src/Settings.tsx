@@ -1,21 +1,9 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Inbox, Trash2, Wand2, X } from "lucide-react";
 import { useDensity, type Density } from "./density";
+import { useLocale, type Locale } from "./i18n";
 
-const choices: { value: Density; title: string; text: string }[] = [
-  {
-    value: "compact",
-    title: "Compact",
-    text: "A tight, spreadsheet-style table. More rows on screen.",
-  },
-  {
-    value: "relaxed",
-    title: "Relaxed",
-    text: "Roomier cards grouped by day, like the dashboard.",
-  },
-];
-
-/** Profile settings. Holds list layout, data & backup, and account deletion. */
+/** Profile settings. Holds appearance, list layout, data & backup, and account deletion. */
 export function SettingsDialog({
   onClose,
   onDeleteAccount,
@@ -24,6 +12,7 @@ export function SettingsDialog({
   pendingAlertCount = 0,
   security,
   notifications,
+  household,
   dataBackup,
 }: {
   onClose: () => void;
@@ -34,10 +23,28 @@ export function SettingsDialog({
   pendingAlertCount?: number;
   security?: ReactNode;
   notifications?: ReactNode;
+  household?: ReactNode;
   dataBackup?: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [density, setDensity] = useDensity();
+  const { locale, setLocale, t } = useLocale();
+  const choices: { value: Density; title: string; text: string }[] = [
+    {
+      value: "compact",
+      title: t("settings.compactTitle"),
+      text: t("settings.compactText"),
+    },
+    {
+      value: "relaxed",
+      title: t("settings.relaxedTitle"),
+      text: t("settings.relaxedText"),
+    },
+  ];
+  const languages: { value: Locale; label: string }[] = [
+    { value: "en", label: t("settings.langEn") },
+    { value: "ar", label: t("settings.langAr") },
+  ];
   useEffect(() => {
     dialog.current?.showModal();
   }, []);
@@ -56,19 +63,41 @@ export function SettingsDialog({
     >
       <div className="modal-head">
         <div>
-          <span className="eyebrow">PROFILE</span>
-          <h2 id="settings-title">Settings</h2>
+          <span className="eyebrow">{t("settings.eyebrow")}</span>
+          <h2 id="settings-title">{t("settings.title")}</h2>
         </div>
-        <button className="icon-button" aria-label="Close" onClick={onClose}>
+        <button
+          className="icon-button"
+          aria-label={t("common.close")}
+          onClick={onClose}
+        >
           <X size={18} />
         </button>
       </div>
       <fieldset className="density-field">
-        <legend>Layout</legend>
-        <p className="muted small">
-          Choose how transactions, accounts and categories are laid out. Saved
-          on this device.
-        </p>
+        <legend>{t("settings.appearance")} · {t("settings.language")}</legend>
+        <p className="muted small">{t("settings.languageHint")}</p>
+        <div className="language-options">
+          {languages.map((lang) => (
+            <label
+              key={lang.value}
+              className={`language-option ${locale === lang.value ? "is-selected" : ""}`}
+            >
+              <span>{lang.label}</span>
+              <input
+                type="radio"
+                name="locale"
+                value={lang.value}
+                checked={locale === lang.value}
+                onChange={() => setLocale(lang.value)}
+              />
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="density-field">
+        <legend>{t("settings.layout")}</legend>
+        <p className="muted small">{t("settings.layoutHint")}</p>
         <div className="density-options">
           {choices.map((c) => (
             <label
@@ -114,35 +143,30 @@ export function SettingsDialog({
       </fieldset>
       {security}
       {notifications}
+      {household}
       {onOpenRules && (
         <div className="settings-danger">
           <div>
-            <b>Transaction rules</b>
-            <p className="muted small">
-              Auto-categorize, rename payees, and tag transactions on import or
-              in the editor.
-            </p>
+            <b>{t("settings.rulesTitle")}</b>
+            <p className="muted small">{t("settings.rulesText")}</p>
           </div>
           <button type="button" className="secondary" onClick={onOpenRules}>
-            <Wand2 size={15} /> Manage rules
+            <Wand2 size={15} /> {t("common.manageRules")}
           </button>
         </div>
       )}
       {onOpenCaptureAlerts && (
         <div className="settings-danger">
           <div>
-            <b>Email &amp; Shortcut Capture</b>
-            <p className="muted small">
-              Auto-capture bank alerts via email forwarding, iOS Shortcuts,
-              Android Tasker, or clipboard.
-            </p>
+            <b>{t("settings.captureTitle")}</b>
+            <p className="muted small">{t("settings.captureText")}</p>
           </div>
           <button
             type="button"
             className="secondary"
             onClick={onOpenCaptureAlerts}
           >
-            <Inbox size={15} /> Captured alerts
+            <Inbox size={15} /> {t("settings.capturedAlerts")}
             {pendingAlertCount > 0 ? ` (${pendingAlertCount})` : ""}
           </button>
         </div>
@@ -151,19 +175,17 @@ export function SettingsDialog({
       {onDeleteAccount && (
         <div className="settings-danger">
           <div>
-            <b>Delete my account</b>
-            <p className="muted small">
-              Removes your sign-in and everything you have saved.
-            </p>
+            <b>{t("settings.deleteAccountTitle")}</b>
+            <p className="muted small">{t("settings.deleteAccountText")}</p>
           </div>
           <button className="secondary danger" onClick={onDeleteAccount}>
-            <Trash2 size={15} /> Delete…
+            <Trash2 size={15} /> {t("settings.deleteEllipsis")}
           </button>
         </div>
       )}
       <div className="modal-actions">
         <button className="primary" onClick={onClose}>
-          Done
+          {t("common.done")}
         </button>
       </div>
     </dialog>

@@ -21,6 +21,7 @@ import { DashboardGoals } from "./GoalsView";
 import { DashboardNetWorth } from "./NetWorthView";
 import { DashboardRecurring, type RecurringTab } from "./RecurringView";
 import { Empty, TransactionList } from "./TransactionList";
+import { useLocale } from "./i18n";
 
 export interface SpendingItem {
   id: string;
@@ -105,15 +106,19 @@ export function OverviewPage({
     [monthly],
   );
 
+  const { t } = useLocale();
+
   return (
     <>
       <section className="stats">
         <article className="stat net">
           <div className="stat-label">
-            Total net balance{" "}
+            {t("overview.totalNetBalance")}{" "}
             <button
               className="icon-button"
-              aria-label={hidden ? "Show balances" : "Hide balances"}
+              aria-label={
+                hidden ? t("overview.showBalances") : t("overview.hideBalances")
+              }
               onClick={() => setHidden(!hidden)}
             >
               {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -121,47 +126,49 @@ export function OverviewPage({
           </div>
           <h2>{concealed(net)}</h2>
           <small>
-            Across {ledger.accounts.length} accounts{" "}
-            <span>Including credit balances</span>
+            {t("overview.acrossAccounts", { count: ledger.accounts.length })}{" "}
+            <span>{t("overview.includingCredit")}</span>
           </small>
           <div className="stat-decoration" />
         </article>
         <article className="stat">
           <div className="stat-label">
-            Income{" "}
+            {t("overview.income")}{" "}
             <span className="round-icon green">
               <ArrowDownLeft size={19} />
             </span>
           </div>
           <h2>{concealed(summary.income)}</h2>
           <small>
-            Money coming in <span className="green-text">{rangeLabel}</span>
+            {t("overview.moneyComingIn")}{" "}
+            <span className="green-text">{rangeLabel}</span>
           </small>
         </article>
         <article className="stat">
           <div className="stat-label">
-            Expenses{" "}
+            {t("overview.expenses")}{" "}
             <span className="round-icon terracotta">
               <ArrowUpRight size={19} />
             </span>
           </div>
           <h2>{concealed(summary.expense)}</h2>
           <small>
-            Money going out <span>{rangeLabel}</span>
+            {t("overview.moneyGoingOut")} <span>{rangeLabel}</span>
           </small>
         </article>
       </section>
       <section className="section">
         <div className="section-title">
           <h2>
-            Your accounts{" "}
+            {t("overview.yourAccounts")}{" "}
             <span className="count">{ledger.accounts.length}</span>
           </h2>
           <button
             className="text-button"
             onClick={() => onNavigate("Accounts")}
           >
-            View all accounts <ArrowRight size={15} />
+            {t("overview.viewAllAccounts")}{" "}
+            <ArrowRight size={15} className="rtl-flip" />
           </button>
         </div>
         <div className="account-grid">
@@ -197,8 +204,8 @@ export function OverviewPage({
             <span>
               <Plus size={21} />
             </span>
-            <b>Add an account</b>
-            <small>Bring your money together</small>
+            <b>{t("overview.addAnAccount")}</b>
+            <small>{t("overview.bringMoneyTogether")}</small>
           </button>
         </div>
       </section>
@@ -210,10 +217,10 @@ export function OverviewPage({
                 className="text-button"
                 onClick={() => onNavigate("Reports")}
               >
-                <h2>Where it went</h2>
-                <ArrowRight size={16} />
+                <h2>{t("overview.whereItWent")}</h2>
+                <ArrowRight size={16} className="rtl-flip" />
               </button>
-              <p>Your spending by category</p>
+              <p>{t("overview.spendingByCategory")}</p>
             </div>
             <Tags size={18} className="muted" />
           </div>
@@ -221,7 +228,7 @@ export function OverviewPage({
             <>
               <div className="donut" style={{ background: donutGradient }}>
                 <div>
-                  <small>TOTAL SPENT</small>
+                  <small>{t("overview.totalSpent")}</small>
                   <b>{concealed(summary.expense)}</b>
                 </div>
               </div>
@@ -243,22 +250,23 @@ export function OverviewPage({
             </>
           ) : (
             <Empty
-              title="A little more detail, soon"
-              text="Add an expense to see where your money goes."
+              title={t("overview.noSpendingTitle")}
+              text={t("overview.noSpendingText")}
             />
           )}
         </section>
         <section className="panel recent">
           <div className="panel-heading">
             <div>
-              <h2>Recent activity</h2>
-              <p>The latest in your money story</p>
+              <h2>{t("overview.recentActivity")}</h2>
+              <p>{t("overview.recentSubtitle")}</p>
             </div>
             <button
               className="text-button"
               onClick={() => onNavigate("Transactions")}
             >
-              View all <ArrowRight size={15} />
+              {t("overview.viewAll")}{" "}
+              <ArrowRight size={15} className="rtl-flip" />
             </button>
           </div>
           <TransactionList

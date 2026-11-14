@@ -180,6 +180,13 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
     date: "2026-01-15",
     notes: "Initial valuation",
   });
+  const pushSubA = await backendA.savePushSubscription({
+    endpoint: `https://push.example.com/sub/${suffix}`,
+    p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM",
+    auth: "tBHItJI5svbpez7KI4CCXg",
+    user_agent: "FuloosTest/1.0",
+    created_at_iso: "2026-01-15T10:00:00.000Z",
+  });
 
   // 3. User B loads their ledger and sees zero records from User A.
   const ledgerB = await backendB.load();
@@ -201,6 +208,9 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
   const tokenB = await backendB.loadCaptureToken();
   assert.equal(tokenB.supported, true);
   assert.equal(tokenB.token, null);
+  const pushSubsB = await backendB.loadPushSubscriptions();
+  assert.equal(pushSubsB.supported, true);
+  assert.equal(pushSubsB.subscriptions.length, 0);
 
   // 4. User B cannot mutate or delete any of User A's records by ID.
   const userARecords: Array<{
@@ -221,6 +231,7 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
     { table: "net_worth_snapshots", id: nwSnapshotA.id },
     { table: "capture_tokens", id: captureTokenA.id },
     { table: "captured_alerts", id: capturedAlertA.id },
+    { table: "push_subscriptions", id: pushSubA.id },
   ];
   for (const { table, id } of userARecords) {
     await assert.rejects(
@@ -453,6 +464,20 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
   assert.equal(alertsA.supported, true);
   assert.equal(alertsA.alerts.length, 1);
   assert.equal(alertsA.alerts[0].id, capturedAlertA.id);
+  const pushSubsA = await backendA.loadPushSubscriptions();
+  assert.equal(pushSubsA.supported, true);
+  assert.equal(pushSubsA.subscriptions.length, 1);
+  assert.equal(pushSubsA.subscriptions[0].id, pushSubA.id);
+  // Saving the same endpoint updates in-place instead of creating a duplicate.
+  const updatedSubA = await backendA.savePushSubscription({
+    endpoint: pushSubA.endpoint,
+    p256dh: pushSubA.p256dh,
+    auth: pushSubA.auth,
+    user_agent: "FuloosTest/2.0",
+    created_at_iso: "2026-01-15T10:05:00.000Z",
+  });
+  assert.equal(updatedSubA.id, pushSubA.id);
+  assert.equal(updatedSubA.user_agent, "FuloosTest/2.0");
 
   // 7. Multi-currency round-trip and SQLite trigger enforcement.
   const usdAccount = await backendB.save("accounts", {
@@ -497,4 +522,60 @@ test("PocketBase migrations apply cleanly and enforce strict two-user isolation"
       }),
     isRejectedIsolation,
   );
+
+  // 8. Shared / Household Mode: selective sharing & non-member isolation.
+  const backendC = makeBackend();
+  const signUpC = await backendC.signUp(`user-c-${suffix}@example.com`, password);
+  assert.ok(signUpC.session?.user.id);
+
+  const { household: householdA } = await backendA.createHousehold("User A Home");
+  const invite = await backendA.createHouseholdInvite(householdA.id, "editor");
+  assert.ok(invite.invite_code);
+
+  // Share accountA with the household, but keep cardA private (household_id = null).
+  const sharedAccA = await backendA.shareAccountWithHousehold(
+    accountA.id,
+    householdA.id,
+  );
+  assert.equal(sharedAccA.household_id, householdA.id);
+
+  // (a) Non-member User C CANNOT read/edit User A's household, invites, or shared account.
+  const householdsC = await backendC.loadHouseholds();
+  assert.equal(householdsC.supported, true);
+  assert.equal(householdsC.households.length, 0);
+  assert.equal(householdsC.members.length, 0);
+  const ledgerC = await backendC.load();
+  assert.equal(ledgerC.accounts.length, 0);
+  assert.equal(ledgerC.transactions.length, 0);
+  await assert.rejects(
+    () => backendC.save("accounts", { name: "Hijack Shared" }, accountA.id),
+    isRejectedIsolation,
+  );
+
+  // (b) User B joins via invite_code and CAN read the shared account & its transactions.
+  const joined = await backendB.joinHouseholdByCode(invite.invite_code!);
+  assert.equal(joined.household.id, householdA.id);
+  assert.equal(joined.member.status, "active");
+
+  const ledgerBAfterJoin = await backendB.load();
+  const accountIdsB = new Set(ledgerBAfterJoin.accounts.map((a) => a.id));
+  const txIdsB = new Set(ledgerBAfterJoin.transactions.map((t) => t.id));
+  assert.equal(accountIdsB.has(accountA.id), true);
+  assert.equal(txIdsB.has(txA.id), true);
+
+  // (c) User B STILL CANNOT read User A's private (non-shared) account (cardA).
+  assert.equal(accountIdsB.has(cardA.id), false);
+
+  // Editor User B can also record a transaction on the shared account.
+  const sharedTxByB = await backendB.save("transactions", {
+    type: "expense",
+    amount: 1500,
+    account_id: accountA.id,
+    to_account_id: "",
+    category_id: categoryB.id,
+    date: "2026-01-21",
+    payee: "Shared Coffee",
+    notes: "",
+  });
+  assert.equal(sharedTxByB.account_id, accountA.id);
 });

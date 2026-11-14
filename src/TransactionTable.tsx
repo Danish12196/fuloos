@@ -30,6 +30,7 @@ import {
   type SortKey,
 } from "./register";
 import { useDensity } from "./density";
+import { useLocale } from "./i18n";
 import "./transactionTable.css";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -120,6 +121,7 @@ export function TransactionsPanel({
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [categorizing, setCategorizing] = useState<string | null>(null);
   const [density] = useDensity();
+  const { t: tr } = useLocale();
 
   useEffect(() => {
     setPage(1);
@@ -518,7 +520,7 @@ export function TransactionsPanel({
           disabled={busy || loading || !ledger.accounts.length}
           onClick={onImportSms}
         >
-          Import SMS
+          {tr("tx.importSms")}
         </button>
         {onOpenCaptureAlerts && (
           <button
@@ -527,7 +529,7 @@ export function TransactionsPanel({
             disabled={busy || loading}
             onClick={onOpenCaptureAlerts}
           >
-            Captured alerts{pendingAlertCount > 0 ? ` (${pendingAlertCount})` : ""}
+            {tr("settings.capturedAlerts")}{pendingAlertCount > 0 ? ` (${pendingAlertCount})` : ""}
           </button>
         )}
         <button
@@ -535,7 +537,7 @@ export function TransactionsPanel({
           disabled={busy || loading || !ledger.accounts.length}
           onClick={onImportPdf}
         >
-          Import PDF
+          {tr("tx.importPdf")}
         </button>
         <button
           type="button"
@@ -555,13 +557,13 @@ export function TransactionsPanel({
             );
           }}
         >
-          Export CSV
+          {tr("tx.exportCsv")}
         </button>
         <label className="search">
           <Search size={17} />
           <input
             aria-label="Search transactions"
-            placeholder="Search payee, notes, category, amount…"
+            placeholder={tr("tx.searchPlaceholder")}
             value={search}
             onChange={(e) => onSearch(e.target.value)}
           />
@@ -571,7 +573,7 @@ export function TransactionsPanel({
           value={accountFilter}
           onChange={(e) => onAccountFilter(e.target.value)}
         >
-          <option value="">All accounts</option>
+          <option value="">{tr("tx.allAccounts")}</option>
           {ledger.accounts.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name}
@@ -583,17 +585,17 @@ export function TransactionsPanel({
           value={kindFilter}
           onChange={(e) => onKindFilter(e.target.value)}
         >
-          <option value="">All types</option>
-          <option value="expense">Expenses</option>
-          <option value="income">Income</option>
-          <option value="transfer">Transfers</option>
+          <option value="">{tr("tx.allTypes")}</option>
+          <option value="expense">{tr("tx.expense")}</option>
+          <option value="income">{tr("tx.income")}</option>
+          <option value="transfer">{tr("tx.transfer")}</option>
         </select>
         <select
           aria-label="Filter category"
           value={categoryFilter}
           onChange={(e) => setCategoryFilter(e.target.value)}
         >
-          <option value="">All categories</option>
+          <option value="">{tr("tx.allCategories")}</option>
           <option value="uncategorized">Uncategorized</option>
           {ledger.categories.map((c) => (
             <option key={c.id} value={c.id}>
@@ -683,16 +685,16 @@ export function TransactionsPanel({
                 <th className="tx-check">
                   <span className="sr-only">Select</span>
                 </th>
-                {header("date", "Date")}
-                {showAccount && header("account", "Account")}
-                {header("payee", "Payee")}
-                {header("notes", "Notes")}
-                {header("category", "Category")}
-                {header("payment", "Payment", "num")}
-                {header("deposit", "Deposit", "num")}
+                {header("date", tr("tx.col.date"))}
+                {showAccount && header("account", tr("tx.col.account"))}
+                {header("payee", tr("tx.col.payee"))}
+                {header("notes", tr("tx.col.notes"))}
+                {header("category", tr("tx.col.category"))}
+                {header("payment", tr("tx.col.payment"), "num")}
+                {header("deposit", tr("tx.col.deposit"), "num")}
                 {header(
                   "balance",
-                  account ? "Balance" : "Total balance",
+                  account ? tr("tx.col.balance") : "Total balance",
                   "num",
                 )}
                 <th className="tx-actions">

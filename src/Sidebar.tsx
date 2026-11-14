@@ -13,6 +13,19 @@ import {
 } from "lucide-react";
 import { backend, type Session } from "./client";
 import { emptyLedger, type Ledger } from "./domain";
+import { useLocale, type TranslationKey } from "./i18n";
+
+const NAV_ITEMS = [
+  { name: "Overview", icon: LayoutDashboard },
+  { name: "Transactions", icon: ReceiptText },
+  { name: "Recurring", icon: Repeat },
+  { name: "Budgets", icon: PiggyBank },
+  { name: "Goals", icon: Target },
+  { name: "Net Worth", icon: Landmark },
+  { name: "Reports", icon: LayoutDashboard },
+  { name: "Accounts", icon: Wallet },
+  { name: "Categories", icon: Tags },
+] as const;
 
 export function Sidebar({
   page,
@@ -29,6 +42,7 @@ export function Sidebar({
   onOpenSettings: () => void;
   onSignOutDemo: (empty: Ledger) => void;
 }) {
+  const { t } = useLocale();
   return (
     <aside className="sidebar">
       <a
@@ -42,28 +56,18 @@ export function Sidebar({
         <span className="brand-icon">
           <Leaf size={23} />
         </span>
-        fuloos<span className="brand-dot">.</span>
+        {t("brand.name")}<span className="brand-dot">.</span>
       </a>
-      <div className="workspace-label">YOUR WORKSPACE</div>
+      <div className="workspace-label">{t("workspace.label")}</div>
       <nav>
-        {[
-          { name: "Overview", icon: LayoutDashboard },
-          { name: "Transactions", icon: ReceiptText },
-          { name: "Recurring", icon: Repeat },
-          { name: "Budgets", icon: PiggyBank },
-          { name: "Goals", icon: Target },
-          { name: "Net Worth", icon: Landmark },
-          { name: "Reports", icon: LayoutDashboard },
-          { name: "Accounts", icon: Wallet },
-          { name: "Categories", icon: Tags },
-        ].map(({ name, icon: Icon }) => (
+        {NAV_ITEMS.map(({ name, icon: Icon }) => (
           <button
             className={`nav-item ${page === name ? "active" : ""}`}
             key={name}
             onClick={() => onNavigate(name)}
           >
             <Icon size={19} />
-            {name}
+            {t(`nav.${name}` as TranslationKey)}
             {page === name && <span className="nav-dot" />}
           </button>
         ))}
@@ -72,30 +76,31 @@ export function Sidebar({
         <span className="tiny-leaf">
           <Leaf size={19} />
         </span>
-        <b>A little clarity goes a long way.</b>
-        <p>Make room for what matters. One transaction at a time.</p>
+        <b>{t("sidebar.noteTitle")}</b>
+        <p>{t("sidebar.noteBody")}</p>
       </div>
       <div className="profile">
         <span className="avatar">
           {demo ? "D" : session?.user.email?.slice(0, 1).toUpperCase()}
         </span>
         <div>
-          <b>{demo ? "Demo workspace" : session?.user.email?.split("@")[0]}</b>
+          <b>{demo ? t("workspace.demo") : session?.user.email?.split("@")[0]}</b>
           <small>
-            {demo ? "Sample data · not saved" : "Personal workspace"}
+            {demo ? t("workspace.demoSubtitle") : t("workspace.personal")}
           </small>
         </div>
         <button
           className="icon-button"
-          aria-label="Settings"
-          title="Settings"
+          aria-label={t("common.settings")}
+          title={t("common.settings")}
           onClick={onOpenSettings}
         >
           <SettingsIcon size={18} />
         </button>
         <button
           className="icon-button"
-          aria-label="Sign out"
+          aria-label={t("common.signOut")}
+          title={t("common.signOut")}
           onClick={async () => {
             if (demo) {
               onSignOutDemo(emptyLedger);

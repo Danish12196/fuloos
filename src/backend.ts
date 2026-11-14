@@ -10,6 +10,8 @@ import {
   type Category,
   type DigestDay,
   type GoalContribution,
+  type Household,
+  type HouseholdMember,
   type Ledger,
   type NotificationPreferences,
   type RecurringOccurrenceRecord,
@@ -49,7 +51,18 @@ export type Table =
   | "capture_tokens"
   | "captured_alerts"
   | "net_worth_items"
-  | "net_worth_snapshots";
+  | "net_worth_snapshots"
+  | "push_subscriptions"
+  | "households"
+  | "household_members";
+export interface PushSubscriptionRecord {
+  id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  user_agent?: string;
+  created_at_iso?: string;
+}
 export interface CsvPresetRecord {
   id: string;
   name: string;
@@ -87,6 +100,9 @@ type RecordTypes = {
   captured_alerts: CapturedAlert;
   net_worth_items: NetWorthItem;
   net_worth_snapshots: NetWorthSnapshot;
+  push_subscriptions: PushSubscriptionRecord;
+  households: Household;
+  household_members: HouseholdMember;
 };
 /** AI suggestion settings and correction log (see src/ledger/learning.ts). */
 export interface MlSettingsRecord {
@@ -708,11 +724,14 @@ export class PocketBaseBackend {
     table: K,
     value: Record<string, unknown>,
     userId: string,
+    isUpdate = false,
   ): Record<string, unknown> {
-    const body: Record<string, unknown> = {
-      ...value,
-      user_id: userId,
-    };
+    const body: Record<string, unknown> = isUpdate
+      ? { ...value }
+      : {
+          ...value,
+          user_id: userId,
+        };
     for (const key of [
       "to_account_id",
       "category_id",
@@ -726,6 +745,7 @@ export class PocketBaseBackend {
       "set_category_id",
       "currency",
       "original_currency",
+      "household_id",
     ]) {
       if (body[key] === null) body[key] = "";
     }
@@ -761,7 +781,7 @@ export class PocketBaseBackend {
   ): Promise<RecordTypes[K]> {
     if (!this.session) throw new Error("Please sign in.");
     const session = this.session;
-    const body = this.prepareBody(table, value, session.user.id);
+    const body = this.prepareBody(table, value, session.user.id, Boolean(id));
     const record = await this.request<RecordTypes[K]>(
       `/api/collections/fuloos_${table}/records${id ? "/" + encodeURIComponent(id) : ""}`,
       { method: id ? "PATCH" : "POST", body: JSON.stringify(body) },
@@ -782,7 +802,12 @@ export class PocketBaseBackend {
       return this.save("transactions", nextValue, id);
     }
     const session = this.session;
-    const prepared = this.prepareBody("transactions", value, session.user.id);
+    const prepared = this.prepareBody(
+      "transactions",
+      value,
+      session.user.id,
+      Boolean(id),
+    );
     const form = new FormData();
     for (const [key, val] of Object.entries(prepared)) {
       if (val === undefined) continue;
@@ -846,6 +871,11 @@ export class PocketBaseBackend {
         } else {
           delete acc[key];
         }
+      }
+      if (acc.household_id && String(acc.household_id).trim()) {
+        acc.household_id = String(acc.household_id).trim();
+      } else {
+        delete acc.household_id;
       }
       return acc as RecordTypes[K];
     }
@@ -939,6 +969,20 @@ export class PocketBaseBackend {
         amount: b.amount,
         start_month: b.start_month,
         end_month: b.end_month || null,
+        ...(b.household_id ? { household_id: b.household_id } : {}),
+      } as RecordTypes[K];
+    }
+    if (table === "household_members") {
+      const m = record as HouseholdMember;
+      return {
+        id: m.id,
+        household_id: m.household_id,
+        user_id: m.user_id || null,
+        role:
+          m.role === "owner" || m.role === "viewer" ? m.role : "editor",
+        status: m.status === "pending" ? "pending" : "active",
+        invite_code: m.invite_code || undefined,
+        member_email: m.member_email || undefined,
       } as RecordTypes[K];
     }
     if (table === "goals") {
@@ -1021,6 +1065,17 @@ export class PocketBaseBackend {
           p.channels && typeof p.channels === "object"
             ? (p.channels as Record<string, boolean>)
             : { email: Boolean(p.email_enabled) },
+      } as RecordTypes[K];
+    }
+    if (table === "push_subscriptions") {
+      const s = record as Partial<PushSubscriptionRecord>;
+      return {
+        id: String(s.id ?? ""),
+        endpoint: String(s.endpoint ?? ""),
+        p256dh: String(s.p256dh ?? ""),
+        auth: String(s.auth ?? ""),
+        user_agent: String(s.user_agent ?? ""),
+        created_at_iso: String(s.created_at_iso ?? ""),
       } as RecordTypes[K];
     }
     if (table === "capture_tokens") {
@@ -1353,6 +1408,60 @@ export class PocketBaseBackend {
       { method: "POST" },
     );
   }
+  /** Loads Web Push subscriptions, tolerating a missing collection on un-migrated servers. */
+  async loadPushSubscriptions(): Promise<{
+    subscriptions: PushSubscriptionRecord[];
+    supported: boolean;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    try {
+      const rows = await this.rows<PushSubscriptionRecord>(
+        "push_subscriptions",
+      );
+      return {
+        subscriptions: rows.map((r) =>
+          this.normalize("push_subscriptions", r),
+        ),
+        supported: true,
+      };
+    } catch (e) {
+      if (e instanceof MissingCollectionError) {
+        return { subscriptions: [], supported: false };
+      }
+      throw e;
+    }
+  }
+  async savePushSubscription(
+    sub: Omit<PushSubscriptionRecord, "id">,
+  ): Promise<PushSubscriptionRecord> {
+    if (!this.session) throw new Error("Please sign in.");
+    const existing = await this.rows<PushSubscriptionRecord>(
+      "push_subscriptions",
+    );
+    const match = existing.find((r) => r.endpoint === sub.endpoint);
+    return this.save(
+      "push_subscriptions",
+      {
+        endpoint: sub.endpoint,
+        p256dh: sub.p256dh,
+        auth: sub.auth,
+        user_agent: (sub.user_agent ?? "").slice(0, 300),
+        created_at_iso: sub.created_at_iso || new Date().toISOString(),
+      },
+      match?.id,
+    );
+  }
+  async deletePushSubscription(id: string): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.remove("push_subscriptions", id);
+  }
+  async sendTestPushNotification(): Promise<{ ok: boolean; message: string }> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.request<{ ok: boolean; message: string }>(
+      "/api/fuloos/push-test",
+      { method: "POST" },
+    );
+  }
   async loadCaptureToken(): Promise<{
     token: CaptureTokenInfo | null;
     supported: boolean;
@@ -1422,5 +1531,143 @@ export class PocketBaseBackend {
   async deleteCapturedAlert(id: string): Promise<void> {
     if (!this.session) throw new Error("Please sign in.");
     return this.remove("captured_alerts", id);
+  }
+  async loadHouseholds(): Promise<{
+    households: Household[];
+    members: HouseholdMember[];
+    supported: boolean;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    try {
+      const [households, members] = await Promise.all([
+        this.rows<Household>("households"),
+        this.rows<HouseholdMember>("household_members"),
+      ]);
+      return {
+        households,
+        members: members.map((m) => this.normalize("household_members", m)),
+        supported: true,
+      };
+    } catch (e) {
+      if (e instanceof MissingCollectionError) {
+        return { households: [], members: [], supported: false };
+      }
+      throw e;
+    }
+  }
+  async createHousehold(name: string): Promise<{
+    household: Household;
+    member: HouseholdMember;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Enter a household name.");
+    const household = await this.request<Household>(
+      "/api/collections/fuloos_households/records",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: trimmed,
+          owner_id: this.session.user.id,
+        }),
+      },
+    );
+    const members = await this.rows<HouseholdMember>("household_members");
+    const existing = members
+      .map((m) => this.normalize("household_members", m))
+      .find(
+        (m) =>
+          m.household_id === household.id &&
+          m.user_id === this.session?.user.id,
+      );
+    if (existing) {
+      return { household, member: existing };
+    }
+    const created = await this.request<HouseholdMember>(
+      "/api/collections/fuloos_household_members/records",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          household_id: household.id,
+          user_id: this.session.user.id,
+          role: "owner",
+          status: "active",
+          invite_code: "",
+          member_email: this.session.user.email,
+        }),
+      },
+    );
+    return {
+      household,
+      member: this.normalize("household_members", created),
+    };
+  }
+  async createHouseholdInvite(
+    householdId: string,
+    role: "editor" | "viewer" = "editor",
+  ): Promise<HouseholdMember> {
+    if (!this.session) throw new Error("Please sign in.");
+    const member = await this.request<HouseholdMember>(
+      "/api/fuloos/households/invite",
+      {
+        method: "POST",
+        body: JSON.stringify({ household_id: householdId, role }),
+      },
+    );
+    return this.normalize("household_members", member);
+  }
+  async joinHouseholdByCode(inviteCode: string): Promise<{
+    household: Household;
+    member: HouseholdMember;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    const code = inviteCode.trim().toUpperCase();
+    if (!code) throw new Error("Enter an invite code.");
+    const result = await this.request<{
+      household: Household;
+      member: HouseholdMember;
+    }>("/api/fuloos/households/join", {
+      method: "POST",
+      body: JSON.stringify({ invite_code: code }),
+    });
+    return {
+      household: result.household,
+      member: this.normalize("household_members", result.member),
+    };
+  }
+  async leaveHousehold(householdId: string): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    const { households, members, supported } = await this.loadHouseholds();
+    if (!supported) return;
+    const household = households.find((h) => h.id === householdId);
+    if (household && household.owner_id === this.session.user.id) {
+      await this.remove("households", householdId);
+      return;
+    }
+    const member = members.find(
+      (m) =>
+        m.household_id === householdId && m.user_id === this.session?.user.id,
+    );
+    if (member) {
+      await this.remove("household_members", member.id);
+    }
+  }
+  async removeHouseholdMember(memberId: string): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.remove("household_members", memberId);
+  }
+  async shareAccountWithHousehold(
+    accountId: string,
+    householdId: string | null,
+  ): Promise<Account> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.save("accounts", { household_id: householdId }, accountId);
+  }
+  async shareBudgetWithHousehold(
+    budgetId: string,
+    householdId: string | null,
+  ): Promise<Budget> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.save("budgets", { household_id: householdId }, budgetId);
   }
 }

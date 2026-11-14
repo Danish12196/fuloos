@@ -1,0 +1,267 @@
+/* RTL & Arabic typography overrides */
+:root[dir="rtl"] {
+  font-family:
+    "Noto Sans Arabic", "IBM Plex Sans Arabic", "Tahoma", "DM Sans", sans-serif;
+}
+
+:root[dir="rtl"] h1,
+:root[dir="rtl"] h2,
+:root[dir="rtl"] h3,
+:root[dir="rtl"] .brand {
+  font-family:
+    "Noto Sans Arabic", "IBM Plex Sans Arabic", Manrope, "DM Sans", sans-serif;
+  letter-spacing: 0;
+}
+
+:root[dir="rtl"] .eyebrow,
+:root[dir="rtl"] .workspace-label,
+:root[dir="rtl"] .auth-story > small,
+:root[dir="rtl"] .currency-pill {
+  letter-spacing: 0;
+}
+
+/* Sidebar & main layout */
+[dir="rtl"] .sidebar {
+  inset: 0 0 0 auto;
+  border-right: 0;
+  border-left: 1px solid var(--line);
+}
+
+[dir="rtl"] main {
+  margin-left: 0;
+  margin-right: 246px;
+}
+
+[dir="rtl"] .brand-dot {
+  margin-left: 0;
+  margin-right: -8px;
+}
+
+[dir="rtl"] .nav-item {
+  text-align: right;
+}
+
+[dir="rtl"] .nav-dot {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+[dir="rtl"] .profile > .icon-button {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+[dir="rtl"] .profile > .icon-button + .icon-button {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Topbar & footer */
+[dir="rtl"] .currency-pill span {
+  padding-left: 0;
+  border-left: 0;
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
+}
+
+[dir="rtl"] .footer-brand {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+/* Overview & cards */
+[dir="rtl"] .stat-decoration {
+  right: auto;
+  left: -65px;
+}
+
+[dir="rtl"] .account-card {
+  text-align: right;
+}
+
+[dir="rtl"] .category-legend b {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+[dir="rtl"] .category-legend small {
+  text-align: left;
+}
+
+[dir="rtl"] .transaction-main {
+  text-align: right;
+}
+
+[dir="rtl"] .transaction-value {
+  margin-left: 0;
+  margin-right: auto;
+  text-align: left;
+}
+
+[dir="rtl"] .transaction-row > .delete {
+  margin-left: 0;
+  margin-right: 9px;
+}
+
+/* Tables & registers */
+[dir="rtl"] .tx-table th {
+  text-align: right;
+}
+
+[dir="rtl"] .tx-table .num,
+[dir="rtl"] .tx-table th.num,
+[dir="rtl"] .tx-table .tx-actions {
+  text-align: left;
+}
+
+[dir="rtl"] .tx-table .tx-check {
+  padding-right: 10px;
+  padding-left: 0;
+}
+
+[dir="rtl"] .tx-table .tx-actions {
+  padding-left: 10px;
+  padding-right: 0;
+}
+
+[dir="rtl"] .tx-sort svg {
+  margin-inline-start: 2px;
+}
+
+[dir="rtl"] .tx-group-count {
+  margin-right: 12px;
+  margin-left: 0;
+}
+
+/* Bulk & settings */
+[dir="rtl"] .bulk-toolbar .bulk-actions {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+[dir="rtl"] .compact-row .compact-actions {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+/* Period picker popover */
+[dir="rtl"] .period-popover {
+  left: auto;
+  right: 0;
+}
+
+[dir="rtl"] .period-trigger {
+  text-align: right;
+}
+
+/* Queue dock & mobile FAB */
+[dir="rtl"] .queue-dock {
+  right: auto;
+  left: 20px;
+}
+
+/* Auth screen */
+[dir="rtl"] .auth-theme-toggle {
+  right: auto;
+  left: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+[dir="rtl"] .auth-story:after {
+  right: auto;
+  left: -200px;
+}
+
+/* Recurring & enrichment accents */
+[dir="rtl"] .recurring-card.is-income {
+  border-left: 0;
+  border-right: 3px solid #4d865b;
+}
+
+[dir="rtl"] .recurring-card.is-expense {
+  border-left: 0;
+  border-right: 3px solid #bf8d70;
+}
+
+[dir="rtl"] .tag-chip {
+  margin-left: 0;
+  margin-right: 0.25rem;
+}
+
+/* Directional icon flipping in RTL */
+[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}
+
+/* Language switcher in Settings */
+.language-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.language-option {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  cursor: pointer;
+  margin-bottom: 0 !important;
+  font-weight: 500 !important;
+}
+
+.language-option.is-selected {
+  border-color: var(--brand);
+  background: var(--active-surface);
+  color: var(--brand);
+  font-weight: 650 !important;
+}
+
+.language-option input {
+  width: auto;
+  margin: 0;
+}
+
+/* Responsive RTL breakpoints */
+@media (max-width: 1200px) {
+  [dir="rtl"] main {
+    margin-left: 0;
+    margin-right: 212px;
+  }
+}
+
+@media (max-width: 850px) {
+  [dir="rtl"] main {
+    margin-left: 0;
+    margin-right: 78px;
+  }
+}
+
+@media (max-width: 780px) {
+  [dir="rtl"] .quick-add-fab {
+    right: auto;
+    left: 18px;
+  }
+}
+
+@media (max-width: 650px) {
+  [dir="rtl"] .sidebar {
+    inset: auto 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  [dir="rtl"] main {
+    margin-right: 0;
+  }
+  [dir="rtl"] .queue-dock {
+    right: auto;
+    left: 16px;
+  }
+}

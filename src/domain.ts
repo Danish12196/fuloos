@@ -35,6 +35,7 @@ export interface Account {
   payment_due_day?: number;
   apr_bps?: number;
   minimum_payment?: number;
+  household_id?: string | null;
 }
 export interface Category {
   id: string;
@@ -109,6 +110,23 @@ export interface Budget {
   amount: number;
   start_month: string;
   end_month: string | null;
+  household_id?: string | null;
+}
+export type HouseholdRole = "owner" | "editor" | "viewer";
+export type HouseholdMemberStatus = "active" | "pending";
+export interface Household {
+  id: string;
+  name: string;
+  owner_id: string;
+}
+export interface HouseholdMember {
+  id: string;
+  household_id: string;
+  user_id: string | null;
+  role: HouseholdRole;
+  status: HouseholdMemberStatus;
+  invite_code?: string;
+  member_email?: string;
 }
 export type GoalKind = "savings" | "sinking_fund";
 export type GoalStatus = "active" | "completed" | "paused";
