@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Trash2, X } from "lucide-react";
 import { useDensity, type Density } from "./density";
 
@@ -15,14 +15,20 @@ const choices: { value: Density; title: string; text: string }[] = [
   },
 ];
 
-/** Profile settings. Today it holds the list layout choice. */
+/** Profile settings. Holds list layout, data & backup, and account deletion. */
 export function SettingsDialog({
   onClose,
   onDeleteAccount,
+  security,
+  notifications,
+  dataBackup,
 }: {
   onClose: () => void;
   /** Only offered when signed in (not in the demo workspace). */
   onDeleteAccount?: () => void;
+  security?: ReactNode;
+  notifications?: ReactNode;
+  dataBackup?: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [density, setDensity] = useDensity();
@@ -100,6 +106,9 @@ export function SettingsDialog({
           ))}
         </div>
       </fieldset>
+      {security}
+      {notifications}
+      {dataBackup}
       {onDeleteAccount && (
         <div className="settings-danger">
           <div>

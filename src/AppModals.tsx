@@ -1,3 +1,4 @@
+import { Suspense, lazy, type ReactNode } from "react";
 import { planAccountDeletion } from "./accountDeletion";
 import { BulkEdit } from "./BulkEdit";
 import { BudgetEditorModal, type BudgetDraft } from "./BudgetsView";
@@ -9,7 +10,8 @@ import {
   type Session,
 } from "./client";
 import type { ImportTransaction } from "./csv";
-import { CsvImport } from "./CsvImport";
+import { DataBackup } from "./DataBackup";
+import type { FuloosBackup, RestoreMode } from "./backup";
 import { DeleteAccountDialog } from "./DeleteAccount";
 import { DeleteCategoriesDialog } from "./DeleteCategories";
 import { DeleteMoneyAccountDialog } from "./DeleteMoneyAccount";
@@ -29,9 +31,16 @@ import {
   ConfirmOccurrenceModal,
   RecurringEditorModal,
 } from "./RecurringView";
+import { NotificationSettings } from "./NotificationSettings";
 import { SettingsDialog } from "./Settings";
-import { SmsImport } from "./SmsImport";
 import { planTransactionDeletion } from "./transactionDeletion";
+
+const CsvImport = lazy(() =>
+  import("./CsvImport").then((m) => ({ default: m.CsvImport })),
+);
+const SmsImport = lazy(() =>
+  import("./SmsImport").then((m) => ({ default: m.SmsImport })),
+);
 
 export function AppModals({
   demo,
@@ -80,6 +89,8 @@ export function AppModals({
   confirmLinkOccurrence,
   modal,
   setModal,
+  restoreBackup,
+  security,
 }: {
   demo: boolean;
   session: Session | null;
@@ -163,12 +174,45 @@ export function AppModals({
   ) => Promise<void>;
   modal: EditorModalState;
   setModal: (v: EditorModalState) => void;
+  restoreBackup: (backup: FuloosBackup, mode: RestoreMode) => Promise<void>;
+  security?: ReactNode;
 }) {
   return (
     <>
       {settingsOpen && (
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
+          security={security}
+          notifications={
+            <NotificationSettings
+              demo={demo}
+              userEmail={session?.user.email}
+              busy={busy}
+              onLoadPrefs={
+                !demo && backend
+                  ? () => backend!.loadNotificationPrefs()
+                  : undefined
+              }
+              onSavePrefs={
+                !demo && backend
+                  ? (p) => backend!.saveNotificationPrefs(p)
+                  : undefined
+              }
+              onSendTestEmail={
+                !demo && backend
+                  ? () => backend!.sendTestNotificationEmail()
+                  : undefined
+              }
+            />
+          }
+          dataBackup={
+            <DataBackup
+              ledger={ledger}
+              presetStore={presetStore}
+              busy={busy}
+              onRestore={restoreBackup}
+            />
+          }
           onDeleteAccount={
             !demo && session
               ? () => {
@@ -240,29 +284,33 @@ export function AppModals({
         />
       )}
       {importOpen && (
-        <CsvImport
-          ledger={ledger}
-          onClose={() => setImportOpen(false)}
-          onImport={(rows, progress, paired) =>
-            importTransactions(rows, progress, "CSV import:", undefined, paired)
-          }
-          onCreateCategories={createCategories}
-          presetStore={presetStore}
-          onCreateCategory={async (value) => {
-            await save("categories", value);
-          }}
-        />
+        <Suspense fallback={null}>
+          <CsvImport
+            ledger={ledger}
+            onClose={() => setImportOpen(false)}
+            onImport={(rows, progress, paired) =>
+              importTransactions(rows, progress, "CSV import:", undefined, paired)
+            }
+            onCreateCategories={createCategories}
+            presetStore={presetStore}
+            onCreateCategory={async (value) => {
+              await save("categories", value);
+            }}
+          />
+        </Suspense>
       )}
       {smsOpen && (
-        <SmsImport
-          ledger={ledger}
-          owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
-          learning={learningStore}
-          onClose={() => setSmsOpen(false)}
-          onImport={(rows, progress, onSaved) =>
-            importTransactions(rows, progress, "SMS import:", onSaved)
-          }
-        />
+        <Suspense fallback={null}>
+          <SmsImport
+            ledger={ledger}
+            owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
+            learning={learningStore}
+            onClose={() => setSmsOpen(false)}
+            onImport={(rows, progress, onSaved) =>
+              importTransactions(rows, progress, "SMS import:", onSaved)
+            }
+          />
+        </Suspense>
       )}
       {recurringModal && (
         <RecurringEditorModal

@@ -10,3 +10,8 @@ dist/
 /public/ledger-model*.json
 *.ledger-model.json
 ledger_web_model.json
+
+# Local PocketBase binary & Playwright artifacts
+.pocketbase/
+playwright-report/
+test-results/

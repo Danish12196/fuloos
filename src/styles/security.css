@@ -1,0 +1,170 @@
+/* Account security, App Lock screen, and Auth auxiliary actions */
+.auth-aux-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.security-field {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  margin: 0 0 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.security-field legend {
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.security-block {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.security-block:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.security-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.security-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.security-select-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.security-select-row select {
+  width: auto;
+  min-width: 150px;
+}
+
+.security-lock-prefs {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--soft-surface);
+}
+
+.security-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin: 0;
+}
+
+.security-checkbox input {
+  width: auto;
+  margin: 0;
+}
+
+.security-sub-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--soft-surface);
+}
+
+.security-inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.security-inline-form input {
+  flex: 1;
+}
+
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.applock-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.applock-card {
+  width: 100%;
+  max-width: 390px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 28px;
+  display: grid;
+  gap: 14px;
+  text-align: center;
+}
+
+.applock-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.applock-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  background: var(--soft-surface);
+  display: grid;
+  place-items: center;
+  margin: 4px auto 0;
+}
+
+.applock-card h1 {
+  font-size: 22px;
+  margin: 0;
+}
+
+.applock-form {
+  display: grid;
+  gap: 12px;
+  text-align: left;
+}
+
+.applock-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.applock-note {
+  margin: 4px 0 0;
+}

@@ -84,6 +84,39 @@ export const defaultRecurringPreferences: RecurringPreferences = {
   auto_match: "auto",
   dismissed_keys: [],
 };
+export type DigestDay =
+  | "sun"
+  | "mon"
+  | "tue"
+  | "wed"
+  | "thu"
+  | "fri"
+  | "sat";
+export interface NotificationPreferences {
+  id?: string;
+  email_enabled: boolean;
+  upcoming_bill_enabled: boolean;
+  upcoming_bill_days: number;
+  overdue_enabled: boolean;
+  budget_80_enabled: boolean;
+  budget_100_enabled: boolean;
+  weekly_digest_enabled: boolean;
+  digest_day: DigestDay;
+  timezone: string;
+  channels?: Record<string, boolean>;
+}
+export const defaultNotificationPreferences: NotificationPreferences = {
+  email_enabled: false,
+  upcoming_bill_enabled: false,
+  upcoming_bill_days: 3,
+  overdue_enabled: false,
+  budget_80_enabled: false,
+  budget_100_enabled: false,
+  weekly_digest_enabled: false,
+  digest_day: "sun",
+  timezone: "Asia/Dubai",
+  channels: { email: false },
+};
 export interface Ledger {
   accounts: Account[];
   categories: Category[];

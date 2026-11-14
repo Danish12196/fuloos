@@ -104,7 +104,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parsePresetEntry(value: unknown): CsvPreset | null {
+export function parsePresetEntry(value: unknown): CsvPreset | null {
   if (!isPlainObject(value)) return null;
   if (typeof value.name !== "string") return null;
   const name = value.name.trim();

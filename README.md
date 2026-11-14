@@ -46,6 +46,8 @@ Set `VITE_POCKETBASE_URL` as a build environment variable after backend setup. N
 - A transfer is one atomic row affecting both accounts; edits/deletion affect both sides together. Credit card payments are transfers. Opening balances and transfers are excluded from income/expenses.
 - Integer fils throughout; no floating-point monetary arithmetic.
 - PocketBase API ownership rules plus SQLite integrity triggers for cross-user references, transfers, recurring occurrence uniqueness, dates, deletion restrictions, and automation preferences.
+- **Installable PWA & Quick-Add**: Web app manifest (`public/manifest.webmanifest`), SVG/PNG/maskable icons, and a production-only static-shell service worker (`public/sw.js`) with a user-controlled "Update now" prompt. Authenticated PocketBase responses and financial data are never cached; when offline, the cached shell displays an offline banner and pauses signed-in writes so no changes are silently lost (in-memory demo mode continues to work offline). Includes a fast **Add transaction** modal (amount, expense/income toggle, category, last-used account memory, payee, date) reachable via the `n` keyboard shortcut on desktop, a mobile floating action button, the `/?quickadd=1` app shortcut, and Web Share Target prefill.
+- **Data export, full backup & restore**: Export filtered transactions and period reports (summary, category spending, and budget vs actual) to CSV with formula-injection protection (`=`, `+`, `-`, `@`, tab, CR). Export a versioned (`format_version: 1`) full-account JSON backup (accounts, categories, transactions, recurring schedules, occurrences, preferences, budgets, and CSV presets) from **Settings → Data & backup**; `ml_examples` and `ml_settings` are intentionally excluded to avoid exporting raw merchant text and account-specific ML consent/category mappings. Restore validates schema, integer fils, size limits, and referential integrity, previews record counts, requires explicit confirmation, and supports both **Restore into empty account only** and **Merge with existing data** with ID remapping via batched `TaskQueue` writes (and in-memory demo mode).
 
 New users start with an empty workspace. Create accounts and categories before adding transactions or recurring schedules. Deleting a used category requires reassignment first; deleting an account with transactions or recurring schedules requires moving/removing them first. Deleting a recurring schedule removes its schedule and confirmation links while preserving past recorded ledger transactions and balances. Editing an opening balance intentionally changes the derived current balance.
 
@@ -105,6 +107,13 @@ Tests cover exact money calculations, transfers, neutral-category usage, recurri
 FULOOS_TEST_EMAIL=you+fuloos-test@example.com FULOOS_TEST_PASSWORD='long-random-password' npm run check:live -- --signup
 ```
 
+## Testing
+
+- **Unit tests** (`npm test`): Runs Node's built-in test runner against `tests/*.test.ts`.
+- **Demo E2E tests** (`npm run build && npm run test:e2e`): Runs Playwright against the built app in in-memory demo mode (no PocketBase required). Install Chromium once with `npx playwright install chromium`.
+- **PocketBase integration tests** (`npm run test:pb`): Downloads PocketBase into `.pocketbase/` (if not cached), applies all migrations in `pocketbase/pb_migrations/` on a temporary database, and verifies clean migration + strict two-user API isolation using `PocketBaseBackend`.
+
+
 ## Scope
 
 Android SMS capture, PDF imports, automated payment execution, push notifications, savings goals and cloud LLM APIs are deferred. The ledger is shared-client-ready; one currency (AED) is maintained to prevent implicit FX conversions.
@@ -122,3 +131,15 @@ Review parsed transactions and exclude individual rows before confirming. Invali
 ### Enable bulk imports
 
 In PocketBase Settings → Application, enable Batch requests and allow at least 100 requests per batch. Keep processing-time and body-size limits bounded (for example 3 seconds and 1 MB), then save. The existing per-user collection rules still apply to every operation in the batch. The importer reports a configuration error if batching is disabled; it does not fall back to individual writes.
+
+## Email notifications
+
+Open **Settings → Notifications** to opt in to server-side email alerts (all alerts start **off** by default): upcoming bills due (configurable 1–30 days ahead), overdue recurring occurrences, monthly budgets reaching 80% or exceeding 100%, and an optional weekly summary digest on a chosen day (default timezone `Asia/Dubai`). Emails are plain and privacy-conscious (only the item or summary totals, never a full ledger dump), deduplicated in `fuloos_notification_log`, and include a manage/unsubscribe link via `APP_URL`. Demo mode keeps preferences in memory only. See [PocketBase setup](pocketbase/README.md#email-notifications-1794540000_notificationsjs--pb_hooks) for SMTP, `APP_URL`, and `pb_hooks` deployment.
+
+## Account security
+
+- **Opt-in Email OTP 2FA, password reset & email verification**: Users can enable Email OTP two-factor authentication, verify their email, change their password or email from **Settings → Account & Security**, and reset forgotten passwords from the sign-in screen. Requires `1794520000_account_security.js` and PocketBase SMTP configuration (see [PocketBase setup](pocketbase/README.md#account-security-1794520000_account_securityjs--pb_hooks)).
+- **Session management & Sign out everywhere**: Shows the active account, supports single-device sign-out, configurable idle session sign-out, and **Sign out everywhere** via `pocketbase/pb_hooks/fuloos_security.pb.js` (rotates the user's server `tokenKey` to invalidate all active tokens).
+- **App lock (PIN privacy screen)**: Optional 4–8 digit PIN stored in `localStorage` as a salted PBKDF2-SHA256 hash via WebCrypto. Locks after configurable idle time or on app reopen, removes all financial data from the DOM while locked, and signs out after 5 failed attempts. This is a client-side privacy screen, not data encryption.
+- **Security headers (`vercel.json`)**: Configures strict CSP (`default-src 'self'`, `worker-src 'self'`, `manifest-src 'self'`, `frame-ancestors 'none'`, PocketBase origin in `connect-src`), HSTS, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, and `Permissions-Policy`.
+
