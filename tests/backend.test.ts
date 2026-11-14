@@ -470,6 +470,37 @@ test("PocketBase load fetches all 7 collections, normalizes relations, recurring
       ],
       totalPages: 1,
     }),
+    json({
+      items: [
+        {
+          id: "goal1",
+          name: "Emergency",
+          target_amount: 500000,
+          current_amount: 100000,
+          target_date: "",
+          account_id: "",
+          color: "#1d5b48",
+          kind: "savings",
+          status: "active",
+          notes: "",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({
+      items: [
+        {
+          id: "gc1",
+          goal_id: "goal1",
+          amount: 100000,
+          date: "2026-01-05",
+          transaction_id: "",
+          notes: "",
+        },
+      ],
+      totalPages: 1,
+    }),
+    json({ items: [], totalPages: 1 }), // rules
   );
 
   await f.backend.signIn("test@example.test", "test-only-password");
@@ -752,6 +783,9 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_occurrences not migrated yet
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_recurring_prefs not migrated yet
     json({ message: "Missing collection context.", data: {} }, 404), // fuloos_budgets not migrated yet
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_goals not migrated yet
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_goal_contributions not migrated yet
+    json({ message: "Missing collection context.", data: {} }, 404), // fuloos_rules not migrated yet
   );
 
   await f.backend.signIn("test@example.test", "test-only-password");
@@ -762,6 +796,8 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
   assert.deepEqual(ledger.recurring, []);
   assert.deepEqual(ledger.recurring_occurrences, []);
   assert.deepEqual(ledger.budgets, []);
+  assert.deepEqual(ledger.goals, []);
+  assert.deepEqual(ledger.goal_contributions, []);
   assert.deepEqual(ledger.recurring_prefs, {
     auto_detect: "on",
     auto_match: "auto",
@@ -771,6 +807,9 @@ test("PocketBase load degrades recurring collections to empty arrays on 404 pre-
   // Core collection 404 still rejects loudly
   f.queue.push(
     json({ message: "Missing collection context.", data: {} }, 404),
+    json({ items: [], totalPages: 1 }),
+    json({ items: [], totalPages: 1 }),
+    json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),
     json({ items: [], totalPages: 1 }),

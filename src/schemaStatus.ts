@@ -9,8 +9,11 @@ export const EXPECTED_COLLECTIONS: readonly Table[] = [
   "recurring_prefs",
   "csv_presets",
   "budgets",
+  "goals",
+  "goal_contributions",
   "ml_settings",
   "ml_examples",
+  "rules",
 ];
 
 export interface SchemaStatus {

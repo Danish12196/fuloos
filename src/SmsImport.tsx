@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ImportProgress } from "./ImportProgress";
 import { money, uaeToday, type Ledger } from "./domain";
 import type { ImportTransaction } from "./csv";
+import { applyRules } from "./rules";
 import { CANONICAL, CANONICAL_LABEL } from "./ledger/categoriser";
 import { loadLedgerModel, type ModelState } from "./ledger/loader";
 import { loadMap, saveMap, type CategoryMap } from "./ledger/mapping";
@@ -136,19 +137,34 @@ export function SmsImport({
     [ledger.categories],
   );
   // Duplicates are re-checked on the edited values (a changed date or payee can create or clear one).
-  const rows = useMemo(
-    () =>
-      markDuplicates(
-        preview.map((r) => ({
+  const rows = useMemo(() => {
+    const rules = ledger.rules ?? [];
+    return markDuplicates(
+      preview.map((r) => {
+        if (!r.transaction) return { ...r, transaction: null };
+        let tx = r.transaction;
+        if (rules.length) {
+          const res = applyRules(rules, tx, {
+            overwriteCategory: false,
+            overwritePayee: false,
+          });
+          if (res.matchedRules.length) {
+            tx = {
+              ...tx,
+              category_id: res.category_id,
+              payee: res.payee,
+              ...(res.tags.length ? { tags: res.tags } : {}),
+            };
+          }
+        }
+        return {
           ...r,
-          transaction: r.transaction
-            ? { ...r.transaction, ...edits[r.index] }
-            : null,
-        })),
-        ledger,
-      ),
-    [preview, edits, ledger],
-  );
+          transaction: { ...tx, ...edits[r.index] },
+        };
+      }),
+      ledger,
+    );
+  }, [preview, edits, ledger]);
   const { importable, skipped, invalid } = useMemo(() => {
     const imp: typeof rows = [];
     const skp: typeof rows = [];
@@ -407,9 +423,49 @@ export function SmsImport({
               />
             </label>
           </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "8px",
+              marginBottom: "4px",
+            }}
+          >
+            <span>Paste SMS</span>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!!fileMessages}
+              onClick={async () => {
+                setError("");
+                try {
+                  if (!navigator.clipboard?.readText) {
+                    setError(
+                      "Clipboard access is unavailable in this browser. Paste into the box below.",
+                    );
+                    return;
+                  }
+                  const text = await navigator.clipboard.readText();
+                  if (!text.trim()) {
+                    setError("Your clipboard is empty.");
+                    return;
+                  }
+                  resetInputs();
+                  setPasted(text);
+                } catch {
+                  setError(
+                    "Clipboard permission denied. Paste your SMS directly into the box below.",
+                  );
+                }
+              }}
+            >
+              Paste from clipboard
+            </button>
+          </div>
           <label>
-            Paste SMS
             <textarea
+              aria-label="Paste SMS"
               rows={6}
               value={pasted}
               disabled={!!fileMessages}

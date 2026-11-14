@@ -10,6 +10,7 @@ import {
   type CsvOptions,
   type ImportTransaction,
 } from "./csv";
+import { applyRules } from "./rules";
 import type { Transaction } from "./domain";
 import {
   appliedMatches,
@@ -159,10 +160,28 @@ export function CsvImport({
     () => new Map(ledger.accounts.map((a) => [a.id, a])),
     [ledger.accounts],
   );
-  const basePreview = useMemo(
-    () => previewCsv(data, options, ledger),
-    [data, options, ledger],
-  );
+  const basePreview = useMemo(() => {
+    const raw = previewCsv(data, options, ledger);
+    const rules = ledger.rules ?? [];
+    if (!rules.length) return raw;
+    return raw.map((r) => {
+      if (!r.transaction) return r;
+      const res = applyRules(rules, r.transaction, {
+        overwriteCategory: false,
+        overwritePayee: false,
+      });
+      if (!res.matchedRules.length) return r;
+      return {
+        ...r,
+        transaction: {
+          ...r.transaction,
+          category_id: res.category_id,
+          payee: res.payee,
+          ...(res.tags.length ? { tags: res.tags } : {}),
+        },
+      };
+    });
+  }, [data, options, ledger]);
   // checked against the ledger for the other side of a transfer.
   const { matches, matchRows } = useMemo(() => {
     const manual = options.transfers ?? {};

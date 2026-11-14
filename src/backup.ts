@@ -1,5 +1,6 @@
 import type { PocketBaseBackend } from "./backend.ts";
 import { budgetsOverlap, isMonth, MAX_BUDGET_AMOUNT } from "./budgets.ts";
+import { normalizeSplits, normalizeTags } from "./enrichment.ts";
 import {
   parsePresetEntry,
   presetKey,
@@ -430,6 +431,28 @@ export function parseAndValidateBackup(rawText: string): {
               max: 1000,
             });
 
+      const tags = raw.tags !== undefined ? normalizeTags(raw.tags) : undefined;
+      const splits =
+        raw.splits !== undefined ? normalizeSplits(raw.splits) : undefined;
+      if (splits && splits.length > 0) {
+        if (type === "transfer") {
+          fail(`Transfer transaction #${i + 1} cannot have splits.`);
+        }
+        let splitSum = 0;
+        for (const s of splits) {
+          if (!Number.isSafeInteger(s.amount) || s.amount <= 0) {
+            fail(`Transaction #${i + 1} has an invalid split amount.`);
+          }
+          if (s.category_id && !categoryIds.has(s.category_id)) {
+            fail(`Transaction #${i + 1} split references missing category.`);
+          }
+          splitSum += s.amount;
+        }
+        if (splitSum !== amount) {
+          fail(`Transaction #${i + 1} split amounts do not sum to total.`);
+        }
+      }
+
       const tx: Transaction = {
         id,
         type,
@@ -440,6 +463,8 @@ export function parseAndValidateBackup(rawText: string): {
         date,
         payee,
         notes,
+        ...(tags && tags.length > 0 ? { tags } : {}),
+        ...(splits && splits.length > 0 ? { splits } : {}),
       };
       txById.set(id, tx);
       return tx;
@@ -1000,6 +1025,17 @@ export async function executeRestore(params: {
       date: t.date,
       payee: t.payee,
       notes: t.notes,
+      ...(t.tags && t.tags.length > 0 ? { tags: [...t.tags] } : {}),
+      ...(t.splits && t.splits.length > 0
+        ? {
+            splits: t.splits.map((s) => ({
+              ...s,
+              category_id: s.category_id
+                ? (categoryIdMap.get(s.category_id) ?? s.category_id)
+                : null,
+            })),
+          }
+        : {}),
     };
     if (mode === "merge") {
       const fp = transactionFingerprint(remapped);

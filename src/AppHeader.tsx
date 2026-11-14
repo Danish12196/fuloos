@@ -96,11 +96,13 @@ export function AppPageHeader({
                 ? "Subscriptions, bills and regular income — balances stay untouched until paid."
                 : page === "Budgets"
                   ? "Monthly limits per category, and how your spending measures up."
-                  : page === "Accounts"
-                    ? "Every account. One place to see where you stand."
-                    : page === "Categories"
-                      ? "Organize your money in a way that makes sense to you."
-                      : "The small details behind the bigger picture."}
+                  : page === "Goals"
+                    ? "Savings goals and sinking funds, tracked at your own pace."
+                    : page === "Accounts"
+                      ? "Every account. One place to see where you stand."
+                      : page === "Categories"
+                        ? "Organize your money in a way that makes sense to you."
+                        : "The small details behind the bigger picture."}
           </p>
         </div>
         <button
@@ -117,7 +119,9 @@ export function AppPageHeader({
                 ? "Add recurring"
                 : page === "Budgets"
                   ? "Add budget"
-                  : "Add transaction"}
+                  : page === "Goals"
+                    ? "Add goal"
+                    : "Add transaction"}
         </button>
       </div>
       {error && (

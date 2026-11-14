@@ -10,6 +10,8 @@ import {
   X,
 } from "lucide-react";
 import { errorMessage, today, type Ledger } from "./domain";
+import { collectLedgerTags } from "./enrichment";
+import { TagInput } from "./TagInput";
 import {
   buildQuickAddTransaction,
   pickDefaultAccountId,
@@ -57,7 +59,9 @@ export function QuickAddModal({
   const [categoryId, setCategoryId] = useState(initialDraft?.categoryId ?? "");
   const [payee, setPayee] = useState(initialDraft?.payee ?? "");
   const [date, setDate] = useState(initialDraft?.date ?? today());
+  const [tags, setTags] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const tagSuggestions = collectLedgerTags(ledger);
 
   useEffect(() => {
     dialog.current?.showModal();
@@ -88,7 +92,10 @@ export function QuickAddModal({
         ledger,
       );
       saveRememberedAccount(accountId);
-      await onSave("transactions", record);
+      await onSave("transactions", {
+        ...record,
+        ...(tags.length > 0 ? { tags } : {}),
+      });
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -242,6 +249,18 @@ export function QuickAddModal({
                 onChange={(e) => setDate(e.target.value)}
               />
             </label>
+          </div>
+
+          <div className="field-block">
+            <span className="field-label">
+              Tags <span className="muted">Optional</span>
+            </span>
+            <TagInput
+              tags={tags}
+              onChange={setTags}
+              suggestions={tagSuggestions}
+              disabled={busy}
+            />
           </div>
 
           {error && (

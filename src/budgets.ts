@@ -1,4 +1,5 @@
 import type { Budget, Category, Ledger, Transaction } from "./domain.ts";
+import { transactionCategoryAmounts } from "./enrichment.ts";
 
 export const MAX_BUDGET_AMOUNT = 100_000_000_000;
 /** Share of a budget spent before a category is flagged as close to its limit. */
@@ -140,8 +141,11 @@ export function budgetReport(
   );
   const spentByKey = new Map<string, number>();
   for (const t of expenses) {
-    const key = `${t.category_id ?? ""}|${t.date.slice(0, 7)}`;
-    spentByKey.set(key, (spentByKey.get(key) ?? 0) + t.amount);
+    const monthKey = t.date.slice(0, 7);
+    for (const part of transactionCategoryAmounts(t)) {
+      const key = `${part.category_id ?? ""}|${monthKey}`;
+      spentByKey.set(key, (spentByKey.get(key) ?? 0) + part.amount);
+    }
   }
   const budgetsByCat = new Map<string, Budget[]>();
   for (const b of budgets) {
@@ -204,13 +208,15 @@ export function unbudgetedCategories(
   }
   const spentByCat = new Map<string, number>();
   for (const t of ledger.transactions) {
-    if (
-      t.type === "expense" &&
-      t.category_id &&
-      !budgetedCats.has(t.category_id) &&
-      t.date.slice(0, 7) === month
-    ) {
-      spentByCat.set(t.category_id, (spentByCat.get(t.category_id) ?? 0) + t.amount);
+    if (t.type === "expense" && t.date.slice(0, 7) === month) {
+      for (const part of transactionCategoryAmounts(t)) {
+        if (part.category_id && !budgetedCats.has(part.category_id)) {
+          spentByCat.set(
+            part.category_id,
+            (spentByCat.get(part.category_id) ?? 0) + part.amount,
+          );
+        }
+      }
     }
   }
   return ledger.categories
