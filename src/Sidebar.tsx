@@ -7,6 +7,7 @@ import {
   Repeat,
   Settings as SettingsIcon,
   Tags,
+  Target,
   Wallet,
 } from "lucide-react";
 import { backend, type Session } from "./client";
@@ -49,6 +50,7 @@ export function Sidebar({
           { name: "Transactions", icon: ReceiptText },
           { name: "Recurring", icon: Repeat },
           { name: "Budgets", icon: PiggyBank },
+          { name: "Goals", icon: Target },
           { name: "Reports", icon: LayoutDashboard },
           { name: "Accounts", icon: Wallet },
           { name: "Categories", icon: Tags },

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { Trash2, X } from "lucide-react";
+import { Inbox, Trash2, Wand2, X } from "lucide-react";
 import { useDensity, type Density } from "./density";
 
 const choices: { value: Density; title: string; text: string }[] = [
@@ -19,6 +19,9 @@ const choices: { value: Density; title: string; text: string }[] = [
 export function SettingsDialog({
   onClose,
   onDeleteAccount,
+  onOpenRules,
+  onOpenCaptureAlerts,
+  pendingAlertCount = 0,
   security,
   notifications,
   dataBackup,
@@ -26,6 +29,9 @@ export function SettingsDialog({
   onClose: () => void;
   /** Only offered when signed in (not in the demo workspace). */
   onDeleteAccount?: () => void;
+  onOpenRules?: () => void;
+  onOpenCaptureAlerts?: () => void;
+  pendingAlertCount?: number;
   security?: ReactNode;
   notifications?: ReactNode;
   dataBackup?: ReactNode;
@@ -108,6 +114,39 @@ export function SettingsDialog({
       </fieldset>
       {security}
       {notifications}
+      {onOpenRules && (
+        <div className="settings-danger">
+          <div>
+            <b>Transaction rules</b>
+            <p className="muted small">
+              Auto-categorize, rename payees, and tag transactions on import or
+              in the editor.
+            </p>
+          </div>
+          <button type="button" className="secondary" onClick={onOpenRules}>
+            <Wand2 size={15} /> Manage rules
+          </button>
+        </div>
+      )}
+      {onOpenCaptureAlerts && (
+        <div className="settings-danger">
+          <div>
+            <b>Email &amp; Shortcut Capture</b>
+            <p className="muted small">
+              Auto-capture bank alerts via email forwarding, iOS Shortcuts,
+              Android Tasker, or clipboard.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={onOpenCaptureAlerts}
+          >
+            <Inbox size={15} /> Captured alerts
+            {pendingAlertCount > 0 ? ` (${pendingAlertCount})` : ""}
+          </button>
+        </div>
+      )}
       {dataBackup}
       {onDeleteAccount && (
         <div className="settings-danger">

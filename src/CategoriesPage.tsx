@@ -1,4 +1,4 @@
-import { Pencil, Plus, Tags, Trash2 } from "lucide-react";
+import { Pencil, Plus, Tags, Trash2, Wand2 } from "lucide-react";
 import { plural, type Ledger } from "./domain";
 import type { EditorModalState } from "./EditorModal";
 import { Empty } from "./TransactionList";
@@ -13,6 +13,7 @@ export function CategoriesPage({
   toggleCategory,
   onDeleteCategories,
   onOpenModal,
+  onOpenRules,
 }: {
   ledger: Ledger;
   density: "compact" | "relaxed";
@@ -23,9 +24,25 @@ export function CategoriesPage({
   toggleCategory: (id: string) => void;
   onDeleteCategories: (ids: string[]) => void;
   onOpenModal: (modal: EditorModalState) => void;
+  onOpenRules?: () => void;
 }) {
   return (
     <>
+      {onOpenRules && (
+        <div className="panel bulk-toolbar category-toolbar">
+          <span className="muted small">
+            Automate categorization &amp; tagging with deterministic rules.
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={onOpenRules}
+          >
+            <Wand2 size={15} /> Manage rules ({ledger.rules?.length ?? 0})
+          </button>
+        </div>
+      )}
       {ledger.categories.length > 0 && (
         <div className="panel bulk-toolbar category-toolbar">
           <label className="selection-label">

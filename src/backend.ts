@@ -4,15 +4,22 @@ import {
   defaultRecurringPreferences,
   type Account,
   type Budget,
+  type CaptureAlertStatus,
+  type CaptureTokenInfo,
+  type CapturedAlert,
   type Category,
   type DigestDay,
+  type GoalContribution,
   type Ledger,
   type NotificationPreferences,
   type RecurringOccurrenceRecord,
   type RecurringPreferences,
   type RecurringSchedule,
+  type SavingsGoal,
   type Transaction,
+  type TransactionRule,
 } from "./domain.ts";
+import { normalizeSplits, normalizeTags } from "./enrichment.ts";
 export interface Session {
   token: string;
   user: {
@@ -31,10 +38,15 @@ export type Table =
   | "recurring_prefs"
   | "csv_presets"
   | "budgets"
+  | "goals"
+  | "goal_contributions"
   | "ml_settings"
   | "ml_examples"
+  | "rules"
   | "notification_prefs"
-  | "notification_log";
+  | "notification_log"
+  | "capture_tokens"
+  | "captured_alerts";
 export interface CsvPresetRecord {
   id: string;
   name: string;
@@ -61,10 +73,15 @@ type RecordTypes = {
   recurring_prefs: SavedRecurringPreferences;
   csv_presets: CsvPresetRecord;
   budgets: Budget;
+  goals: SavingsGoal;
+  goal_contributions: GoalContribution;
   ml_settings: MlSettingsRecord;
   ml_examples: MlExampleRecord;
+  rules: TransactionRule;
   notification_prefs: SavedNotificationPreferences;
   notification_log: NotificationLogRecord;
+  capture_tokens: CaptureTokenInfo;
+  captured_alerts: CapturedAlert;
 };
 /** AI suggestion settings and correction log (see src/ledger/learning.ts). */
 export interface MlSettingsRecord {
@@ -223,7 +240,9 @@ export class PocketBaseBackend {
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const token = this.session?.token;
     const headers = new Headers(init.headers);
-    if (init.body) headers.set("Content-Type", "application/json");
+    if (init.body && !(init.body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+    }
     if (token) headers.set("Authorization", token);
     let response: Response;
     try {
@@ -636,6 +655,9 @@ export class PocketBaseBackend {
       recurringOccurrences,
       recurringPrefs,
       budgets,
+      goals,
+      goalContributions,
+      rules,
     ] = await Promise.all([
       this.rows<Account>("accounts"),
       this.rows<Category>("categories"),
@@ -644,6 +666,9 @@ export class PocketBaseBackend {
       this.optionalRows<RecurringOccurrenceRecord>("recurring_occurrences"),
       this.optionalRows<SavedRecurringPreferences>("recurring_prefs"),
       this.optionalRows<Budget>("budgets"),
+      this.optionalRows<SavingsGoal>("goals"),
+      this.optionalRows<GoalContribution>("goal_contributions"),
+      this.optionalRows<TransactionRule>("rules"),
     ]);
     return {
       accounts,
@@ -657,6 +682,11 @@ export class PocketBaseBackend {
         ? this.normalize("recurring_prefs", recurringPrefs[0])
         : { ...defaultRecurringPreferences },
       budgets: budgets.map((b) => this.normalize("budgets", b)),
+      goals: goals.map((g) => this.normalize("goals", g)),
+      goal_contributions: goalContributions.map((c) =>
+        this.normalize("goal_contributions", c),
+      ),
+      rules: rules.map((r) => this.normalize("rules", r)),
     };
   }
   private prepareBody<K extends Table>(
@@ -675,6 +705,10 @@ export class PocketBaseBackend {
       "match_source",
       "match_reason",
       "end_month",
+      "target_date",
+      "account_id",
+      "transaction_id",
+      "set_category_id",
     ]) {
       if (body[key] === null) body[key] = "";
     }
@@ -699,16 +733,105 @@ export class PocketBaseBackend {
       throw new Error("Session changed. Please sign in again.");
     return this.normalize(table, record);
   }
+  async saveTransactionWithReceipt(
+    value: Record<string, unknown>,
+    id?: string,
+    receiptFile?: File | null,
+    removeReceipt = false,
+  ): Promise<Transaction> {
+    if (!this.session) throw new Error("Please sign in.");
+    if (!receiptFile) {
+      const nextValue = removeReceipt ? { ...value, receipt: null } : value;
+      return this.save("transactions", nextValue, id);
+    }
+    const session = this.session;
+    const prepared = this.prepareBody("transactions", value, session.user.id);
+    const form = new FormData();
+    for (const [key, val] of Object.entries(prepared)) {
+      if (val === undefined) continue;
+      if (key === "tags" || key === "splits") {
+        form.append(key, JSON.stringify(val ?? []));
+      } else if (val === null) {
+        form.append(key, "");
+      } else {
+        form.append(key, String(val));
+      }
+    }
+    form.append("receipt", receiptFile);
+    const record = await this.request<Transaction>(
+      `/api/collections/fuloos_transactions/records${id ? "/" + encodeURIComponent(id) : ""}`,
+      { method: id ? "PATCH" : "POST", body: form },
+    );
+    if (this.session?.user.id !== session.user.id)
+      throw new Error("Session changed. Please sign in again.");
+    return this.normalize("transactions", record);
+  }
+  async getReceiptBlobUrl(txId: string, filename: string): Promise<string> {
+    if (!this.session) throw new Error("Please sign in.");
+    const { token } = await this.request<{ token: string }>(
+      "/api/files/token",
+      { method: "POST" },
+    );
+    const fileUrl = `${this.url}/api/files/fuloos_transactions/${encodeURIComponent(txId)}/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}`;
+    const response = await this.fetcher(fileUrl, {
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!response.ok) {
+      throw new BackendError(
+        `Could not load receipt (${response.status}).`,
+        response.status,
+      );
+    }
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  }
   private normalize<K extends Table>(
     table: K,
     record: RecordTypes[K],
   ): RecordTypes[K] {
     if (table === "transactions") {
       const tx = record as Transaction;
+      const tags = normalizeTags(tx.tags);
+      const splits = normalizeSplits(tx.splits);
       return {
         ...tx,
         to_account_id: tx.to_account_id || null,
         category_id: tx.category_id || null,
+        ...(tags.length ? { tags } : { tags: [] }),
+        ...(splits.length ? { splits } : { splits: [] }),
+        ...(tx.receipt ? { receipt: tx.receipt } : {}),
+      } as RecordTypes[K];
+    }
+    if (table === "rules") {
+      const r = record as TransactionRule;
+      const tags = normalizeTags(r.add_tags);
+      return {
+        id: r.id,
+        name: String(r.name ?? ""),
+        enabled: Boolean(r.enabled),
+        priority: Number.isFinite(Number(r.priority)) ? Math.trunc(Number(r.priority)) : 100,
+        match_field:
+          r.match_field === "payee" || r.match_field === "notes"
+            ? r.match_field
+            : "either",
+        match_type:
+          r.match_type === "starts_with" ||
+          r.match_type === "exact" ||
+          r.match_type === "regex"
+            ? r.match_type
+            : "contains",
+        pattern: String(r.pattern ?? ""),
+        min_amount:
+          r.min_amount != null && Number(r.min_amount) > 0
+            ? Math.trunc(Number(r.min_amount))
+            : null,
+        max_amount:
+          r.max_amount != null && Number(r.max_amount) > 0
+            ? Math.trunc(Number(r.max_amount))
+            : null,
+        set_category_id: r.set_category_id || null,
+        add_tags: tags,
+        set_payee: r.set_payee ? String(r.set_payee) : "",
       } as RecordTypes[K];
     }
     if (table === "recurring") {
@@ -749,6 +872,36 @@ export class PocketBaseBackend {
         amount: b.amount,
         start_month: b.start_month,
         end_month: b.end_month || null,
+      } as RecordTypes[K];
+    }
+    if (table === "goals") {
+      const g = record as SavingsGoal;
+      return {
+        id: g.id,
+        name: g.name,
+        target_amount: Number(g.target_amount ?? 0),
+        current_amount: Number(g.current_amount ?? 0),
+        target_date: g.target_date || null,
+        account_id: g.account_id || null,
+        color: g.color || "#1d5b48",
+        emoji: g.emoji || undefined,
+        kind: g.kind === "sinking_fund" ? "sinking_fund" : "savings",
+        status:
+          g.status === "completed" || g.status === "paused"
+            ? g.status
+            : "active",
+        notes: g.notes ?? "",
+      } as RecordTypes[K];
+    }
+    if (table === "goal_contributions") {
+      const c = record as GoalContribution;
+      return {
+        id: c.id,
+        goal_id: c.goal_id,
+        amount: Number(c.amount ?? 0),
+        date: c.date,
+        transaction_id: c.transaction_id || null,
+        notes: c.notes ?? "",
       } as RecordTypes[K];
     }
     if (table === "recurring_prefs") {
@@ -803,6 +956,38 @@ export class PocketBaseBackend {
             : { email: Boolean(p.email_enabled) },
       } as RecordTypes[K];
     }
+    if (table === "capture_tokens") {
+      const t = record as Partial<CaptureTokenInfo>;
+      return {
+        id: String(t.id ?? ""),
+        token_preview: String(t.token_preview ?? ""),
+        enabled: Boolean(t.enabled),
+        default_account_id: t.default_account_id || null,
+      } as RecordTypes[K];
+    }
+    if (table === "captured_alerts") {
+      const a = record as Partial<CapturedAlert>;
+      return {
+        id: String(a.id ?? ""),
+        source: a.source === "shortcut" ? "shortcut" : "email",
+        subject: String(a.subject ?? ""),
+        raw_text: String(a.raw_text ?? ""),
+        parsed_type:
+          a.parsed_type === "expense" || a.parsed_type === "income"
+            ? a.parsed_type
+            : "unknown",
+        parsed_amount: Number(a.parsed_amount ?? 0),
+        parsed_date: String(a.parsed_date ?? ""),
+        parsed_payee: String(a.parsed_payee ?? ""),
+        parsed_notes: String(a.parsed_notes ?? ""),
+        account_hint: String(a.account_hint ?? ""),
+        status:
+          a.status === "imported" || a.status === "dismissed"
+            ? a.status
+            : "pending",
+        created_at_iso: String(a.created_at_iso ?? ""),
+      } as RecordTypes[K];
+    }
     return record;
   }
   async updateTransactions(
@@ -833,6 +1018,8 @@ export class PocketBaseBackend {
               date: t.date,
               payee: t.payee,
               notes: t.notes,
+              tags: t.tags ?? [],
+              splits: t.splits ?? [],
               user_id: session.user.id,
             },
           })),
@@ -1074,5 +1261,75 @@ export class PocketBaseBackend {
       "/api/fuloos/notify-test",
       { method: "POST" },
     );
+  }
+  async loadCaptureToken(): Promise<{
+    token: CaptureTokenInfo | null;
+    supported: boolean;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    try {
+      const rows = await this.rows<CaptureTokenInfo>("capture_tokens");
+      return {
+        token: rows[0] ? this.normalize("capture_tokens", rows[0]) : null,
+        supported: true,
+      };
+    } catch (e) {
+      if (e instanceof MissingCollectionError) {
+        return { token: null, supported: false };
+      }
+      throw e;
+    }
+  }
+  async rotateCaptureToken(): Promise<{
+    id: string;
+    token: string;
+    token_preview: string;
+    enabled: boolean;
+    default_account_id: string | null;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.request("/api/fuloos/capture-token/rotate", { method: "POST" });
+  }
+  async updateCaptureTokenSettings(
+    id: string,
+    patch: { enabled?: boolean; default_account_id?: string | null },
+  ): Promise<CaptureTokenInfo> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.save("capture_tokens", patch, id);
+  }
+  async loadCapturedAlerts(): Promise<{
+    alerts: CapturedAlert[];
+    supported: boolean;
+  }> {
+    if (!this.session) throw new Error("Please sign in.");
+    try {
+      const rows = await this.rows<CapturedAlert>("captured_alerts");
+      return {
+        alerts: rows.map((a) => this.normalize("captured_alerts", a)),
+        supported: true,
+      };
+    } catch (e) {
+      if (e instanceof MissingCollectionError) {
+        return { alerts: [], supported: false };
+      }
+      throw e;
+    }
+  }
+  async createCapturedAlert(
+    alert: Omit<CapturedAlert, "id">,
+  ): Promise<CapturedAlert> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.save("captured_alerts", alert);
+  }
+  async updateCapturedAlertStatus(
+    id: string,
+    status: CaptureAlertStatus,
+  ): Promise<CapturedAlert> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.save("captured_alerts", { status }, id);
+  }
+  async deleteCapturedAlert(id: string): Promise<void> {
+    if (!this.session) throw new Error("Please sign in.");
+    return this.remove("captured_alerts", id);
   }
 }

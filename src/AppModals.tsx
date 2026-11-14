@@ -20,13 +20,16 @@ import {
   emptyLedger,
   type Account,
   type Budget,
+  type CapturedAlert,
   type Category,
   type Ledger,
   type RecurringOccurrenceRecord,
   type RecurringSchedule,
   type Transaction,
+  type TransactionRule,
 } from "./domain";
 import { Editor, type EditorModalState } from "./EditorModal";
+import { RulesManagerModal } from "./RulesManager";
 import {
   ConfirmOccurrenceModal,
   RecurringEditorModal,
@@ -40,6 +43,14 @@ const CsvImport = lazy(() =>
 );
 const SmsImport = lazy(() =>
   import("./SmsImport").then((m) => ({ default: m.SmsImport })),
+);
+const PdfImport = lazy(() =>
+  import("./PdfImport").then((m) => ({ default: m.PdfImport })),
+);
+const CaptureAlertsModal = lazy(() =>
+  import("./CaptureAlertsModal").then((m) => ({
+    default: m.CaptureAlertsModal,
+  })),
 );
 
 export function AppModals({
@@ -72,6 +83,14 @@ export function AppModals({
   setImportOpen,
   smsOpen,
   setSmsOpen,
+  pdfOpen,
+  setPdfOpen,
+  captureAlertsOpen,
+  setCaptureAlertsOpen,
+  pendingAlertCount,
+  onImportCapturedAlert,
+  onDismissCapturedAlert,
+  onAddCapturedAlert,
   importTransactions,
   createCategories,
   presetStore,
@@ -89,6 +108,10 @@ export function AppModals({
   confirmLinkOccurrence,
   modal,
   setModal,
+  rulesOpen,
+  setRulesOpen,
+  saveRule,
+  deleteRule,
   restoreBackup,
   security,
 }: {
@@ -104,7 +127,12 @@ export function AppModals({
     table: "accounts" | "categories" | "transactions",
     value: Record<string, unknown>,
     id?: string,
+    options?: { receiptFile?: File | null; removeReceipt?: boolean },
   ) => Promise<void>;
+  rulesOpen: boolean;
+  setRulesOpen: (v: boolean) => void;
+  saveRule: (rule: Omit<TransactionRule, "id">, id?: string) => Promise<void>;
+  deleteRule: (id: string) => Promise<void>;
   settingsOpen: boolean;
   setSettingsOpen: (v: boolean) => void;
   deleteOpen: boolean;
@@ -128,6 +156,17 @@ export function AppModals({
   setImportOpen: (v: boolean) => void;
   smsOpen: boolean;
   setSmsOpen: (v: boolean) => void;
+  pdfOpen: boolean;
+  setPdfOpen: (v: boolean) => void;
+  captureAlertsOpen: boolean;
+  setCaptureAlertsOpen: (v: boolean) => void;
+  pendingAlertCount: number;
+  onImportCapturedAlert: (
+    alert: CapturedAlert,
+    tx: ImportTransaction,
+  ) => Promise<void>;
+  onDismissCapturedAlert: (alertId: string) => Promise<void>;
+  onAddCapturedAlert: (draft: Omit<CapturedAlert, "id">) => Promise<void>;
   importTransactions: (
     rows: ImportTransaction[],
     progress: (n: number) => void,
@@ -182,6 +221,10 @@ export function AppModals({
       {settingsOpen && (
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
+          onOpenRules={() => {
+            setSettingsOpen(false);
+            setRulesOpen(true);
+          }}
           security={security}
           notifications={
             <NotificationSettings
@@ -312,6 +355,43 @@ export function AppModals({
           />
         </Suspense>
       )}
+      {pdfOpen && (
+        <Suspense fallback={null}>
+          <PdfImport
+            ledger={ledger}
+            onClose={() => setPdfOpen(false)}
+            onImport={(rows, progress, paired) =>
+              importTransactions(rows, progress, "PDF import:", undefined, paired)
+            }
+          />
+        </Suspense>
+      )}
+      {captureAlertsOpen && (
+        <Suspense fallback={null}>
+          <CaptureAlertsModal
+            demo={demo}
+            pbUrl={backend?.url ?? ""}
+            ledger={ledger}
+            owner={demo ? "demo" : (session?.user.id ?? "anonymous")}
+            learning={learningStore}
+            onClose={() => setCaptureAlertsOpen(false)}
+            onImportAlert={onImportCapturedAlert}
+            onDismissAlert={onDismissCapturedAlert}
+            onAddAlert={onAddCapturedAlert}
+            onLoadToken={
+              !demo && backend ? () => backend!.loadCaptureToken() : undefined
+            }
+            onRotateToken={
+              !demo && backend ? () => backend!.rotateCaptureToken() : undefined
+            }
+            onUpdateTokenSettings={
+              !demo && backend
+                ? (id, patch) => backend!.updateCaptureTokenSettings(id, patch)
+                : undefined
+            }
+          />
+        </Suspense>
+      )}
       {recurringModal && (
         <RecurringEditorModal
           item={recurringModal.item}
@@ -359,6 +439,12 @@ export function AppModals({
           modal={modal}
           ledger={ledger}
           busy={busy}
+          demo={demo}
+          onLoadReceiptUrl={
+            !demo && backend
+              ? (txId, filename) => backend!.getReceiptBlobUrl(txId, filename)
+              : undefined
+          }
           onClose={() => {
             if (!busy) setModal(null);
           }}
@@ -366,6 +452,17 @@ export function AppModals({
           onUnlinkOccurrence={(occurrenceId) =>
             void unlinkOccurrence(occurrenceId)
           }
+        />
+      )}
+      {rulesOpen && (
+        <RulesManagerModal
+          ledger={ledger}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setRulesOpen(false);
+          }}
+          onSaveRule={saveRule}
+          onDeleteRule={deleteRule}
         />
       )}
     </>

@@ -117,6 +117,18 @@ export function entryNotes(entry: RegisterEntry): string {
 
 export function entryCategory(entry: RegisterEntry, ledger: Ledger): string {
   if (entry.direction) return "Transfer";
+  if (entry.tx.splits && entry.tx.splits.length > 0) {
+    const names = [
+      ...new Set(
+        entry.tx.splits.map(
+          (s) =>
+            ledger.categories.find((c) => c.id === s.category_id)?.name ??
+            "Uncategorized",
+        ),
+      ),
+    ];
+    return `Split: ${names.join(", ")}`;
+  }
   return (
     ledger.categories.find((c) => c.id === entry.tx.category_id)?.name ?? ""
   );
@@ -129,14 +141,17 @@ export interface RegisterFilters {
   kind?: Kind | "";
   /** A category id, "uncategorized", or "" for all. */
   category?: string;
+  /** A normalized lowercase tag name, or "" for all. */
+  tag?: string;
 }
 
 export function filterRegister(
   entries: RegisterEntry[],
   ledger: Ledger,
-  { from, to, search = "", kind = "", category = "" }: RegisterFilters,
+  { from, to, search = "", kind = "", category = "", tag = "" }: RegisterFilters,
 ): RegisterEntry[] {
   const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const tagNeedle = tag.trim().toLowerCase();
   const accountName = (id: string | null) =>
     ledger.accounts.find((a) => a.id === id)?.name ?? "";
   return entries.filter((e) => {
@@ -145,13 +160,26 @@ export function filterRegister(
     if (to && t.date >= to) return false;
     if (kind && t.type !== kind) return false;
     if (category === "uncategorized") {
-      if (t.type === "transfer" || t.category_id) return false;
-    } else if (category && t.category_id !== category) return false;
+      const hasCat =
+        Boolean(t.category_id) ||
+        Boolean(t.splits?.some((s) => Boolean(s.category_id)));
+      if (t.type === "transfer" || hasCat) return false;
+    } else if (category) {
+      const matchesCat =
+        t.category_id === category ||
+        Boolean(t.splits?.some((s) => s.category_id === category));
+      if (!matchesCat) return false;
+    }
+    if (tagNeedle) {
+      const txTags = (t.tags ?? []).map((x) => x.toLowerCase());
+      if (!txTags.includes(tagNeedle)) return false;
+    }
     if (!terms.length) return true;
     const amount = (e.payment || e.deposit) / 100;
     const haystack = [
       t.payee,
       t.notes,
+      ...(t.tags ?? []),
       entryPayee(e, ledger),
       entryCategory(e, ledger),
       accountName(e.accountId),

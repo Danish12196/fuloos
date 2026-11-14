@@ -5,12 +5,14 @@ import {
   ArrowLeftRight,
   ArrowUp,
   ChevronsUpDown,
+  Paperclip,
   Pencil,
   ReceiptText,
   Search,
   Trash2,
 } from "lucide-react";
 import { today, type Ledger, type Transaction } from "./domain";
+import { collectLedgerTags } from "./enrichment";
 import { downloadBlob, transactionsToCsv } from "./export";
 import {
   buildRegister,
@@ -70,6 +72,9 @@ export function TransactionsPanel({
   onSelectionChange,
   onImport,
   onImportSms,
+  onImportPdf,
+  pendingAlertCount = 0,
+  onOpenCaptureAlerts,
   onEditSelected,
   onDeleteSelected,
   onEdit,
@@ -92,6 +97,9 @@ export function TransactionsPanel({
   onSelectionChange: (next: Set<string>) => void;
   onImport: () => void;
   onImportSms: () => void;
+  onImportPdf: () => void;
+  pendingAlertCount?: number;
+  onOpenCaptureAlerts?: () => void;
   onEditSelected: (items: Transaction[]) => void;
   onDeleteSelected: (items: Transaction[]) => void;
   onEdit: (t: Transaction) => void;
@@ -99,6 +107,7 @@ export function TransactionsPanel({
   onCategorize: (t: Transaction, categoryId: string) => void;
 }) {
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
     key: "date",
     dir: "desc",
@@ -107,6 +116,7 @@ export function TransactionsPanel({
   const [categorizing, setCategorizing] = useState<string | null>(null);
   const [density] = useDensity();
 
+  const ledgerTags = useMemo(() => collectLedgerTags(ledger), [ledger]);
   const account = ledger.accounts.find((a) => a.id === accountFilter);
   const register = useMemo(
     () => buildRegister(ledger, account?.id ?? ""),
@@ -121,12 +131,13 @@ export function TransactionsPanel({
           search,
           kind: kindFilter as "",
           category: categoryFilter,
+          tag: tagFilter,
         }),
         ledger,
         sort.key,
         sort.dir,
       ),
-    [register, ledger, from, to, search, kindFilter, categoryFilter, sort],
+    [register, ledger, from, to, search, kindFilter, categoryFilter, tagFilter, sort],
   );
   const visibleIds = useMemo(
     () => [...new Set(rows.map((r) => r.tx.id))],
@@ -185,6 +196,13 @@ export function TransactionsPanel({
   };
   const categoryCell = (e: RegisterEntry) => {
     if (e.direction) return <span className="tx-transfer">Transfer</span>;
+    if (e.tx.splits && e.tx.splits.length > 0) {
+      return (
+        <span className="tx-category split-badge" title={entryCategory(e, ledger)}>
+          Split ({e.tx.splits.length})
+        </span>
+      );
+    }
     const category = ledger.categories.find((c) => c.id === e.tx.category_id);
     if (category)
       return (
@@ -310,6 +328,20 @@ export function TransactionsPanel({
               {notes}
             </small>
           )}
+          {((t.tags && t.tags.length > 0) || t.receipt) && (
+            <span className="tx-tags-row">
+              {(t.tags ?? []).map((tag) => (
+                <span className="tag-badge" key={tag}>
+                  #{tag}
+                </span>
+              ))}
+              {t.receipt && (
+                <span className="tag-badge receipt-badge" title="Receipt attached">
+                  <Paperclip size={11} /> Receipt
+                </span>
+              )}
+            </span>
+          )}
         </span>
         <span className="tx-card-value">
           <b className={amount > 0 ? "is-in" : ""}>{signed(amount)}</b>
@@ -408,6 +440,23 @@ export function TransactionsPanel({
         >
           Import SMS
         </button>
+        {onOpenCaptureAlerts && (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || loading}
+            onClick={onOpenCaptureAlerts}
+          >
+            Captured alerts{pendingAlertCount > 0 ? ` (${pendingAlertCount})` : ""}
+          </button>
+        )}
+        <button
+          className="secondary"
+          disabled={busy || loading || !ledger.accounts.length}
+          onClick={onImportPdf}
+        >
+          Import PDF
+        </button>
         <button
           type="button"
           className="secondary"
@@ -484,6 +533,23 @@ export function TransactionsPanel({
             </option>
           ))}
         </select>
+        {ledgerTags.length > 0 && (
+          <select
+            aria-label="Filter tag"
+            value={tagFilter}
+            onChange={(e) => {
+              setTagFilter(e.target.value);
+              setLimit(PAGE);
+            }}
+          >
+            <option value="">All tags</option>
+            {ledgerTags.map((tag) => (
+              <option key={tag} value={tag}>
+                #{tag}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="muted small">
           {visibleIds.length} transaction{visibleIds.length === 1 ? "" : "s"}
         </span>
@@ -605,7 +671,16 @@ export function TransactionsPanel({
                       className="tx-text tx-payee"
                       title={entryPayee(e, ledger)}
                     >
-                      {entryPayee(e, ledger)}
+                      <span>{entryPayee(e, ledger)}</span>
+                      {t.tags && t.tags.length > 0 && (
+                        <span className="tx-tags-inline">
+                          {t.tags.map((tag) => (
+                            <span className="tag-badge" key={tag}>
+                              #{tag}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                     </td>
                     <td className="tx-text tx-notes" title={notes}>
                       {notes}
@@ -626,6 +701,18 @@ export function TransactionsPanel({
                       className="tx-actions"
                       onClick={(ev) => ev.stopPropagation()}
                     >
+                      {t.receipt && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          disabled={busy}
+                          title="View receipt"
+                          aria-label={`View receipt for ${label}`}
+                          onClick={() => onEdit(t)}
+                        >
+                          <Paperclip size={14} />
+                        </button>
+                      )}
                       <button
                         className="icon-button"
                         disabled={busy}

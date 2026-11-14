@@ -123,3 +123,20 @@ Fuloos supports opt-in email notifications (upcoming bills due N days ahead, ove
 2. **Sign out everywhere (`pb_hooks/fuloos_security.pb.js`)**:
    - PocketBase does not allow regular users to rotate their own `tokenKey` through the standard record `PATCH` API (non-superuser updates to `tokenKey` are ignored).
    - Copy `pocketbase/pb_hooks/fuloos_security.pb.js` into your PocketBase `pb_hooks` directory and restart PocketBase. It registers `POST /api/fuloos/sign-out-everywhere` (authenticated to `fuloos_users`), which calls `auth.refreshTokenKey()` and `$app.save(auth)` to invalidate all existing JWTs for that user across all browsers and devices.
+
+## Email-Forward & Shortcut Alert Capture (`1794600000_captured_alerts.js` + `pb_hooks`)
+
+Fuloos can automatically capture UAE bank transaction alerts (Liv, Mashreq, ADCB, FAB, ADIB, ENBD) into a per-user **Pending Alerts Queue** without requiring bank aggregator credentials.
+
+1. **Apply the migration & hooks**:
+   - Copy `pocketbase/pb_migrations/1794600000_captured_alerts.js` into `pb_migrations/` and run `./pocketbase migrate up`.
+   - Copy both `pocketbase/pb_hooks/inbound_capture_lib.js` and `pocketbase/pb_hooks/inbound_capture.pb.js` into `pb_hooks/` and restart PocketBase.
+   - Endpoints registered:
+     - `POST /api/fuloos/capture-token/rotate` (authenticated `fuloos_users`): generates/rotates the user's personal capture token (`token_hash` stored via SHA-256).
+     - `POST /api/fuloos/inbound-email`: accepts JSON `{ token, subject?, text?, html?, source? }` (max 64 KB, 20 requests/min/user, 24h deduplication by `raw_text` hash). Also accepts `Authorization: Bearer <token>` or `X-Fuloos-Token: <token>`, and Postmark/Mailgun/Resend field aliases (`TextBody`/`HtmlBody`, `body-plain`/`body-html`).
+2. **Cloudflare Email Worker setup**:
+   - Create an Email Routing rule for your bank-alerts address that forwards the email to a Cloudflare Worker, which extracts `subject`/`text`/`html` and `POST`s `{ token, subject, text, html }` as JSON to `https://<your-pb-host>/api/fuloos/inbound-email`.
+3. **iOS Shortcuts / Android Tasker setup**:
+   - **iOS Shortcuts**: Create a Personal Automation triggered on receiving a bank SMS/Mail (or Share Sheet / Clipboard), then add **Get Contents of URL** (`POST`, JSON body `{ "token": "<YOUR_TOKEN>", "source": "shortcut", "text": "<Shortcut Input>" }`).
+   - **Android Tasker**: Add a Notification/SMS event profile for your bank app/sender and send an **HTTP Request** (`POST`, JSON body `{ "token": "<YOUR_TOKEN>", "source": "shortcut", "text": "%evtprm3" }`).
+

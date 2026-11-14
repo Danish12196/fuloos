@@ -42,6 +42,15 @@ const RecurringPage = lazy(() =>
 const ReportsPage = lazy(() =>
   import("./ReportsPage").then((m) => ({ default: m.ReportsPage })),
 );
+const GoalsPage = lazy(() =>
+  import("./GoalsView").then((m) => ({ default: m.GoalsPage })),
+);
+import {
+  GoalContributeModal,
+  GoalEditorModal,
+  type GoalDraft,
+} from "./GoalsView";
+import { applyContributionAmount } from "./goals";
 import { useRecurringActions } from "./useRecurringActions";
 import { useDeletionActions } from "./useDeletionActions";
 import { useImportAndBulk } from "./useImportAndBulk";
@@ -53,6 +62,9 @@ import {
 import { Sidebar } from "./Sidebar";
 import { AppModals } from "./AppModals";
 import { AppPageHeader, AppTopbar } from "./AppHeader";
+import { pendingCapturedAlerts } from "./captureAlerts";
+import type { ImportTransaction } from "./csv";
+import type { CapturedAlert } from "./domain";
 import { Leaf } from "lucide-react";
 import {
   balance,
@@ -67,9 +79,14 @@ import {
   validateTransaction,
   type Account,
   type Budget,
+  type GoalContribution,
   type Ledger,
+  type SavingsGoal,
   type Transaction,
+  type TransactionRule,
 } from "./domain";
+import { transactionCategoryAmounts } from "./enrichment";
+import { validateRule } from "./rules";
 import { demoLedger } from "./demo";
 import "./style.css";
 import {
@@ -116,6 +133,7 @@ function App() {
     [rangeFrom, setRangeFrom] = useState(today().slice(0, 7)),
     [hidden, setHidden] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const appStorage = useMemo<StorageLike | undefined>(() => {
     try {
       return window.localStorage;
@@ -130,6 +148,8 @@ function App() {
   const bootCheckedRef = useRef(false);
   const [density] = useDensity();
   const [smsOpen, setSmsOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const [captureAlertsOpen, setCaptureAlertsOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(
     new Set(),
@@ -139,6 +159,12 @@ function App() {
     item?: Budget;
     draft?: Partial<BudgetDraft>;
   } | null>(null);
+  const [goalModal, setGoalModal] = useState<{
+    open: true;
+    item?: SavingsGoal;
+  } | null>(null);
+  const [goalContributeTarget, setGoalContributeTarget] =
+    useState<SavingsGoal | null>(null);
   const online = useOnlineStatus();
   const { canInstall, promptInstall } = useInstallPrompt();
   const [swUpdate, setSwUpdate] = useState<(() => void) | null>(null);
@@ -241,6 +267,8 @@ function App() {
     setCategoriesToDelete(null);
     setTransactionsToDelete(null);
     setBudgetModal(null);
+    setGoalModal(null);
+    setGoalContributeTarget(null);
     setBulkItems(null);
     setRecurringModal(null);
     setConfirmOcc(null);
@@ -353,10 +381,13 @@ function App() {
     setLoading(true);
     setError("");
     try {
-      const data = await backend.load();
+      const [data, alertsRes] = await Promise.all([
+        backend.load(),
+        backend.loadCapturedAlerts().catch(() => ({ alerts: [], supported: false })),
+      ]);
       if (current === generation.current) {
         savedTx.current.clear();
-        setLedger(data);
+        setLedger({ ...data, captured_alerts: alertsRes.alerts });
       }
     } catch (e) {
       if (current === generation.current) setError(errorMessage(e));
@@ -394,6 +425,7 @@ function App() {
     table: "accounts" | "categories" | "transactions",
     value: Record<string, unknown>,
     id?: string,
+    options?: { receiptFile?: File | null; removeReceipt?: boolean },
   ) {
     if (!demo && !online) {
       throw new Error("You're offline. Reconnect to save changes.");
@@ -403,7 +435,23 @@ function App() {
     const current = generation.current;
     try {
       if (demo) {
-        const next = { ...value, id: id ?? demoId() };
+        const existing = id
+          ? (
+              ledger[table] as unknown as Array<Record<string, unknown>>
+            ).find((v) => v.id === id)
+          : undefined;
+        const next: Record<string, unknown> = {
+          ...(existing ?? {}),
+          ...value,
+          id: id ?? demoId(),
+        };
+        if (table === "transactions") {
+          if (options?.receiptFile) {
+            next.receipt = URL.createObjectURL(options.receiptFile);
+          } else if (options?.removeReceipt) {
+            delete next.receipt;
+          }
+        }
         setLedger(
           (l) =>
             ({
@@ -421,6 +469,8 @@ function App() {
         const original = id
           ? ledger.transactions.find((t) => t.id === id)
           : undefined;
+        const receiptFile = options?.receiptFile ?? null;
+        const removeReceipt = Boolean(options?.removeReceipt);
         queue.enqueue({
           label: `${id ? "Update" : "Add"} transaction${payee ? ` · ${payee.slice(0, 40)}` : ""}`,
           run: async () => {
@@ -433,9 +483,14 @@ function App() {
                     { ...original, ...value },
                     { ...latest },
                   )
-                : value;
+                : { ...value };
             delete body.id;
-            const record = await api.save("transactions", body, id);
+            const record = await api.saveTransactionWithReceipt(
+              body,
+              id,
+              receiptFile,
+              removeReceipt,
+            );
             if (stillOwner()) mergeRecords("transactions", [record]);
           },
         });
@@ -458,6 +513,125 @@ function App() {
       setBusy(false);
     }
   }
+  async function saveRule(
+    value: Omit<TransactionRule, "id">,
+    id?: string,
+  ) {
+    if (!demo && !online) {
+      throw new Error("You're offline. Reconnect to save rules.");
+    }
+    if (busy) throw new Error("Another operation is running.");
+    validateRule({ ...value, id }, ledger.categories);
+    setBusy(true);
+    const current = generation.current;
+    try {
+      let record: TransactionRule;
+      if (demo) {
+        record = { ...value, id: id ?? demoId() };
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        record = await backend.save("rules", { ...value }, id);
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        rules: id
+          ? (l.rules ?? []).map((r) => (r.id === id ? record : r))
+          : [...(l.rules ?? []), record],
+      }));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteRule(id: string) {
+    if (!demo && !online) {
+      throw new Error("You're offline. Reconnect to delete rules.");
+    }
+    if (busy) return;
+    setBusy(true);
+    const current = generation.current;
+    try {
+      if (!demo) {
+        if (!backend || !session) throw new Error("Please sign in.");
+        await backend.remove("rules", id);
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        rules: (l.rules ?? []).filter((r) => r.id !== id),
+      }));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function importCapturedAlert(
+    alert: CapturedAlert,
+    tx: ImportTransaction,
+  ) {
+    if (!demo && !online) {
+      throw new Error("You're offline. Reconnect to import alerts.");
+    }
+    if (demo) {
+      const id = `tx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      setLedger((l) => ({
+        ...l,
+        transactions: [
+          ...l.transactions,
+          { ...tx, id, to_account_id: tx.to_account_id ?? null },
+        ],
+        captured_alerts: (l.captured_alerts ?? []).map((a) =>
+          a.id === alert.id ? { ...a, status: "imported" } : a,
+        ),
+      }));
+      return;
+    }
+    if (!backend || !session) throw new Error("Please sign in.");
+    const savedTx = await backend.save("transactions", {
+      ...tx,
+      to_account_id: tx.to_account_id ?? "",
+      category_id: tx.category_id ?? "",
+    });
+    await backend.updateCapturedAlertStatus(alert.id, "imported");
+    setLedger((l) => ({
+      ...l,
+      transactions: [...l.transactions, savedTx],
+      captured_alerts: (l.captured_alerts ?? []).map((a) =>
+        a.id === alert.id ? { ...a, status: "imported" } : a,
+      ),
+    }));
+  }
+  async function dismissCapturedAlert(alertId: string) {
+    if (!demo && !online) {
+      throw new Error("You're offline. Reconnect to dismiss alerts.");
+    }
+    if (!demo) {
+      if (!backend || !session) throw new Error("Please sign in.");
+      await backend.updateCapturedAlertStatus(alertId, "dismissed");
+    }
+    setLedger((l) => ({
+      ...l,
+      captured_alerts: (l.captured_alerts ?? []).map((a) =>
+        a.id === alertId ? { ...a, status: "dismissed" } : a,
+      ),
+    }));
+  }
+  async function addCapturedAlert(draft: Omit<CapturedAlert, "id">) {
+    if (demo) {
+      const id = `demo-alert-${Date.now()}`;
+      setLedger((l) => ({
+        ...l,
+        captured_alerts: [{ ...draft, id }, ...(l.captured_alerts ?? [])],
+      }));
+      return;
+    }
+    if (!online) throw new Error("You're offline. Reconnect to save alerts.");
+    if (!backend || !session) throw new Error("Please sign in.");
+    const saved = await backend.createCapturedAlert(draft);
+    setLedger((l) => ({
+      ...l,
+      captured_alerts: [saved, ...(l.captured_alerts ?? [])],
+    }));
+  }
   async function categorize(t: Transaction, categoryId: string) {
     setError("");
     try {
@@ -467,6 +641,178 @@ function App() {
       await save("transactions", next, id);
     } catch (e) {
       setError(errorMessage(e));
+    }
+  }
+  async function saveGoal(value: GoalDraft, id?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      if (demo) {
+        const record: SavingsGoal = { ...value, id: id ?? demoId() };
+        setLedger((l) => ({
+          ...l,
+          goals: id
+            ? (l.goals ?? []).map((g) => (g.id === id ? record : g))
+            : [...(l.goals ?? []), record],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
+        const record = await backend.save("goals", value, id);
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          goals: id
+            ? (l.goals ?? []).map((g) => (g.id === id ? record : g))
+            : [...(l.goals ?? []), record],
+        }));
+      }
+      setGoalModal(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteGoal(goal: SavingsGoal) {
+    setBusy(true);
+    setError("");
+    try {
+      if (!demo) {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
+        await backend.remove("goals", goal.id);
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        goals: (l.goals ?? []).filter((g) => g.id !== goal.id),
+        goal_contributions: (l.goal_contributions ?? []).filter(
+          (c) => c.goal_id !== goal.id,
+        ),
+      }));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function contributeToGoal(payload: {
+    goal: SavingsGoal;
+    amount: number;
+    date: string;
+    notes: string;
+    recordTransaction?: Omit<Transaction, "id">;
+  }) {
+    setBusy(true);
+    setError("");
+    try {
+      const { goal, amount, date, notes, recordTransaction } = payload;
+      const nextAmount = applyContributionAmount(goal.current_amount, amount);
+      const nextStatus =
+        nextAmount >= goal.target_amount && goal.status === "active"
+          ? "completed"
+          : goal.status;
+
+      if (demo) {
+        let txId: string | null = null;
+        let createdTx: Transaction | null = null;
+        if (recordTransaction) {
+          txId = demoId();
+          createdTx = { ...recordTransaction, id: txId };
+        }
+        const contrib: GoalContribution = {
+          id: demoId(),
+          goal_id: goal.id,
+          amount,
+          date,
+          transaction_id: txId,
+          notes,
+        };
+        const updatedGoal: SavingsGoal = {
+          ...goal,
+          current_amount: nextAmount,
+          status: nextStatus,
+        };
+        setLedger((l) => ({
+          ...l,
+          transactions: createdTx
+            ? [...l.transactions, createdTx]
+            : l.transactions,
+          goals: (l.goals ?? []).map((g) =>
+            g.id === goal.id ? updatedGoal : g,
+          ),
+          goal_contributions: [...(l.goal_contributions ?? []), contrib],
+        }));
+      } else {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
+        let createdTx: Transaction | null = null;
+        if (recordTransaction) {
+          createdTx = await backend.save("transactions", recordTransaction);
+        }
+        const contrib = await backend.save("goal_contributions", {
+          goal_id: goal.id,
+          amount,
+          date,
+          transaction_id: createdTx ? createdTx.id : "",
+          notes,
+        });
+        const updatedGoal = await backend.save(
+          "goals",
+          { current_amount: nextAmount, status: nextStatus },
+          goal.id,
+        );
+        if (current !== generation.current) return;
+        setLedger((l) => ({
+          ...l,
+          transactions: createdTx
+            ? [...l.transactions, createdTx]
+            : l.transactions,
+          goals: (l.goals ?? []).map((g) =>
+            g.id === goal.id ? updatedGoal : g,
+          ),
+          goal_contributions: [...(l.goal_contributions ?? []), contrib],
+        }));
+      }
+      setGoalContributeTarget(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteGoalContribution(c: GoalContribution) {
+    setBusy(true);
+    setError("");
+    try {
+      const goal = (ledgerRef.current.goals ?? []).find(
+        (g) => g.id === c.goal_id,
+      );
+      const nextAmount = goal
+        ? applyContributionAmount(goal.current_amount, -c.amount)
+        : null;
+      if (!demo) {
+        if (!backend || !session) throw new Error("Please sign in.");
+        const current = generation.current;
+        await backend.remove("goal_contributions", c.id);
+        if (goal && nextAmount !== null) {
+          await backend.save("goals", { current_amount: nextAmount }, goal.id);
+        }
+        if (current !== generation.current) return;
+      }
+      setLedger((l) => ({
+        ...l,
+        goal_contributions: (l.goal_contributions ?? []).filter(
+          (item) => item.id !== c.id,
+        ),
+        goals:
+          goal && nextAmount !== null
+            ? (l.goals ?? []).map((g) =>
+                g.id === goal.id ? { ...g, current_amount: nextAmount } : g,
+              )
+            : l.goals,
+      }));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
     }
   }
   async function restoreBackup(backup: FuloosBackup, mode: RestoreMode) {
@@ -763,9 +1109,15 @@ function App() {
       : "Sum of transactions";
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const t of ledger.transactions)
-      if (t.category_id)
-        counts.set(t.category_id, (counts.get(t.category_id) ?? 0) + 1);
+    for (const t of ledger.transactions) {
+      const seen = new Set<string>();
+      for (const part of transactionCategoryAmounts(t)) {
+        if (part.category_id && !seen.has(part.category_id)) {
+          seen.add(part.category_id);
+          counts.set(part.category_id, (counts.get(part.category_id) ?? 0) + 1);
+        }
+      }
+    }
     return counts;
   }, [ledger.transactions]);
   const spending = useMemo<SpendingItem[]>(() => {
@@ -773,13 +1125,15 @@ function App() {
     let uncategorized = 0;
     for (const t of monthly) {
       if (t.type !== "expense") continue;
-      if (t.category_id) {
-        byCategory.set(
-          t.category_id,
-          (byCategory.get(t.category_id) ?? 0) + t.amount,
-        );
-      } else {
-        uncategorized += t.amount;
+      for (const part of transactionCategoryAmounts(t)) {
+        if (part.category_id) {
+          byCategory.set(
+            part.category_id,
+            (byCategory.get(part.category_id) ?? 0) + part.amount,
+          );
+        } else {
+          uncategorized += part.amount;
+        }
       }
     }
     const items: SpendingItem[] = [];
@@ -889,6 +1243,8 @@ function App() {
                 setRecurringModal({ open: true });
               } else if (page === "Budgets") {
                 setBudgetModal({ draft: { start_month: month } });
+              } else if (page === "Goals") {
+                setGoalModal({ open: true });
               } else {
                 setModal({
                   kind:
@@ -938,6 +1294,8 @@ function App() {
               onConfirmOccurrence={(schedule, occurrenceDate) =>
                 setConfirmOcc({ schedule, occurrenceDate })
               }
+              onAddGoal={() => setGoalModal({ open: true })}
+              onContributeGoal={(goal) => setGoalContributeTarget(goal)}
             />
           )}
           {page === "Recurring" && (
@@ -1008,6 +1366,20 @@ function App() {
               />
             </Suspense>
           )}
+          {page === "Goals" && (
+            <Suspense fallback={<div className="loading-inline">Loading…</div>}>
+              <GoalsPage
+                ledger={ledger}
+                concealed={concealed}
+                busy={busy}
+                onAddGoal={() => setGoalModal({ open: true })}
+                onEditGoal={(item) => setGoalModal({ open: true, item })}
+                onDeleteGoal={deleteGoal}
+                onContributeGoal={(goal) => setGoalContributeTarget(goal)}
+                onDeleteContribution={deleteGoalContribution}
+              />
+            </Suspense>
+          )}
           {page === "Reports" && (
             <Suspense fallback={<div className="loading-inline">Loading…</div>}>
               <ReportsPage
@@ -1050,6 +1422,7 @@ function App() {
               toggleCategory={toggleCategory}
               onDeleteCategories={setCategoriesToDelete}
               onOpenModal={setModal}
+              onOpenRules={() => setRulesOpen(true)}
             />
           )}
           {page === "Transactions" && (
@@ -1072,6 +1445,11 @@ function App() {
               onSelectionChange={setSelected}
               onImport={() => setImportOpen(true)}
               onImportSms={() => setSmsOpen(true)}
+              onImportPdf={() => setPdfOpen(true)}
+              pendingAlertCount={
+                pendingCapturedAlerts(ledger.captured_alerts).length
+              }
+              onOpenCaptureAlerts={() => setCaptureAlertsOpen(true)}
               onEditSelected={setBulkItems}
               onDeleteSelected={(items) =>
                 setTransactionsToDelete(items.map((t) => t.id))
@@ -1119,6 +1497,14 @@ function App() {
         setImportOpen={setImportOpen}
         smsOpen={smsOpen}
         setSmsOpen={setSmsOpen}
+        pdfOpen={pdfOpen}
+        setPdfOpen={setPdfOpen}
+        captureAlertsOpen={captureAlertsOpen}
+        setCaptureAlertsOpen={setCaptureAlertsOpen}
+        pendingAlertCount={pendingCapturedAlerts(ledger.captured_alerts).length}
+        onImportCapturedAlert={importCapturedAlert}
+        onDismissCapturedAlert={dismissCapturedAlert}
+        onAddCapturedAlert={addCapturedAlert}
         importTransactions={importTransactions}
         createCategories={createCategories}
         presetStore={presetStore}
@@ -1136,6 +1522,10 @@ function App() {
         confirmLinkOccurrence={confirmLinkOccurrence}
         modal={modal}
         setModal={setModal}
+        rulesOpen={rulesOpen}
+        setRulesOpen={setRulesOpen}
+        saveRule={saveRule}
+        deleteRule={deleteRule}
         restoreBackup={restoreBackup}
         security={
           !demo && session ? (
@@ -1150,6 +1540,28 @@ function App() {
           ) : undefined
         }
       />
+      {goalModal && (
+        <GoalEditorModal
+          ledger={ledger}
+          item={goalModal.item}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setGoalModal(null);
+          }}
+          onSave={saveGoal}
+        />
+      )}
+      {goalContributeTarget && (
+        <GoalContributeModal
+          ledger={ledger}
+          goal={goalContributeTarget}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setGoalContributeTarget(null);
+          }}
+          onSubmit={contributeToGoal}
+        />
+      )}
       <QuickAddFab disabled={busy} onClick={() => setQuickAdd({})} />
       {quickAdd && (
         <QuickAddModal

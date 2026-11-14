@@ -1,3 +1,5 @@
+import { validateSplits, validateTags } from "./enrichment.ts";
+
 export type AccountType =
   | "current"
   | "savings"
@@ -33,6 +35,27 @@ export interface Category {
   color: string;
   emoji?: string;
 }
+export interface TransactionSplit {
+  category_id: string | null;
+  amount: number;
+  notes?: string;
+}
+export type RuleMatchField = "payee" | "notes" | "either";
+export type RuleMatchType = "contains" | "starts_with" | "exact" | "regex";
+export interface TransactionRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  match_field: RuleMatchField;
+  match_type: RuleMatchType;
+  pattern: string;
+  min_amount?: number | null;
+  max_amount?: number | null;
+  set_category_id?: string | null;
+  add_tags?: string[];
+  set_payee?: string;
+}
 export interface Transaction {
   id: string;
   type: Kind;
@@ -43,6 +66,9 @@ export interface Transaction {
   date: string;
   payee: string;
   notes: string;
+  tags?: string[];
+  splits?: TransactionSplit[];
+  receipt?: string;
 }
 export interface RecurringSchedule {
   id: string;
@@ -72,6 +98,29 @@ export interface Budget {
   amount: number;
   start_month: string;
   end_month: string | null;
+}
+export type GoalKind = "savings" | "sinking_fund";
+export type GoalStatus = "active" | "completed" | "paused";
+export interface SavingsGoal {
+  id: string;
+  name: string;
+  target_amount: number;
+  current_amount: number;
+  target_date: string | null;
+  account_id: string | null;
+  color: string;
+  emoji?: string;
+  kind: GoalKind;
+  status: GoalStatus;
+  notes: string;
+}
+export interface GoalContribution {
+  id: string;
+  goal_id: string;
+  amount: number;
+  date: string;
+  transaction_id: string | null;
+  notes: string;
 }
 export interface RecurringPreferences {
   id?: string;
@@ -117,6 +166,29 @@ export const defaultNotificationPreferences: NotificationPreferences = {
   timezone: "Asia/Dubai",
   channels: { email: false },
 };
+export type CaptureAlertSource = "email" | "shortcut";
+export type CaptureAlertType = "expense" | "income" | "unknown";
+export type CaptureAlertStatus = "pending" | "imported" | "dismissed";
+export interface CaptureTokenInfo {
+  id: string;
+  token_preview: string;
+  enabled: boolean;
+  default_account_id: string | null;
+}
+export interface CapturedAlert {
+  id: string;
+  source: CaptureAlertSource;
+  subject: string;
+  raw_text: string;
+  parsed_type: CaptureAlertType;
+  parsed_amount: number;
+  parsed_date: string;
+  parsed_payee: string;
+  parsed_notes: string;
+  account_hint: string;
+  status: CaptureAlertStatus;
+  created_at_iso: string;
+}
 export interface Ledger {
   accounts: Account[];
   categories: Category[];
@@ -125,6 +197,10 @@ export interface Ledger {
   recurring_occurrences?: RecurringOccurrenceRecord[];
   recurring_prefs?: RecurringPreferences;
   budgets?: Budget[];
+  goals?: SavingsGoal[];
+  goal_contributions?: GoalContribution[];
+  rules?: TransactionRule[];
+  captured_alerts?: CapturedAlert[];
 }
 export const emptyLedger: Ledger = {
   accounts: [],
@@ -134,6 +210,10 @@ export const emptyLedger: Ledger = {
   recurring_occurrences: [],
   recurring_prefs: defaultRecurringPreferences,
   budgets: [],
+  goals: [],
+  goal_contributions: [],
+  rules: [],
+  captured_alerts: [],
 };
 export function minor(value: string): number {
   if (!/^-?\d+(\.\d{1,2})?$/.test(value.trim()))
@@ -233,6 +313,12 @@ export function validateTransaction(
       throw new Error("Only transfers can have a receiving account.");
     if (t.category_id && !ledger.categories.some((c) => c.id === t.category_id))
       throw new Error("Choose an existing category.");
+  }
+  if (t.tags !== undefined) {
+    validateTags(t.tags);
+  }
+  if (t.splits !== undefined) {
+    validateSplits(t.splits, t.amount, t.type, ledger.categories);
   }
   if (t.id && ledger.recurring_occurrences?.length) {
     const link = ledger.recurring_occurrences.find(

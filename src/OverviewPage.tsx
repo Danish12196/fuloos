@@ -9,8 +9,15 @@ import {
   Tags,
   Wallet,
 } from "lucide-react";
-import { balance, type Account, type Ledger, type Transaction } from "./domain";
+import {
+  balance,
+  type Account,
+  type Ledger,
+  type SavingsGoal,
+  type Transaction,
+} from "./domain";
 import { ACCOUNT_TYPES, type EditorModalState } from "./EditorModal";
+import { DashboardGoals } from "./GoalsView";
 import { DashboardRecurring, type RecurringTab } from "./RecurringView";
 import { Empty, TransactionList } from "./TransactionList";
 
@@ -39,6 +46,8 @@ export function OverviewPage({
   onOpenModal,
   onOpenRecurring,
   onConfirmOccurrence,
+  onAddGoal,
+  onContributeGoal,
 }: {
   ledger: Ledger;
   net: number;
@@ -52,7 +61,13 @@ export function OverviewPage({
   month: string;
   busy: boolean;
   onNavigate: (
-    page: "Overview" | "Transactions" | "Accounts" | "Reports" | "Recurring",
+    page:
+      | "Overview"
+      | "Transactions"
+      | "Accounts"
+      | "Reports"
+      | "Recurring"
+      | "Goals",
   ) => void;
   onSelectAccount: (accountId: string) => void;
   onOpenModal: (modal: EditorModalState) => void;
@@ -64,6 +79,8 @@ export function OverviewPage({
     schedule: NonNullable<Ledger["recurring"]>[number],
     occurrenceDate: string,
   ) => void;
+  onAddGoal: () => void;
+  onContributeGoal: (goal: SavingsGoal) => void;
 }) {
   const donutGradient = useMemo(() => {
     if (summary.expense <= 0 || !spending.length) return "";
@@ -257,6 +274,13 @@ export function OverviewPage({
         busy={busy}
         onOpenRecurring={onOpenRecurring}
         onConfirm={onConfirmOccurrence}
+      />
+      <DashboardGoals
+        ledger={ledger}
+        concealed={concealed}
+        onOpenGoals={() => onNavigate("Goals")}
+        onAddGoal={onAddGoal}
+        onContributeGoal={onContributeGoal}
       />
     </>
   );
