@@ -4,6 +4,8 @@ import { BackendError, MfaRequiredError } from "./backend";
 import { backend } from "./client";
 import { errorMessage } from "./domain";
 import { ThemeToggle } from "./ThemeToggle";
+import { LanguageToggle } from "./LanguageToggle";
+import { useLocale } from "./i18n";
 
 export function Auth({
   onDemo,
@@ -12,6 +14,7 @@ export function Auth({
   onDemo: () => void;
   externalError: string;
 }) {
+  const { t } = useLocale();
   const [signup, setSignup] = useState(false),
     [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
@@ -202,53 +205,52 @@ export function Auth({
           <span className="brand-icon">
             <Leaf size={24} />
           </span>
-          fuloos.
+          {t("brand.name")}.
         </a>
         <div>
-          <div className="eyebrow">A LITTLE MORE CLARITY</div>
+          <div className="eyebrow">{t("auth.eyebrow")}</div>
           <h1>
-            Your money.
+            {t("auth.heroLine1")}
             <br />
-            Your life.
+            {t("auth.heroLine2")}
             <br />
-            <em>In balance.</em>
+            <em>{t("auth.heroLine3")}</em>
           </h1>
           <p>
-            A calm space for your everyday finances.
+            {t("auth.heroBody1")}
             <br />
-            Bring your accounts together and make room
+            {t("auth.heroBody2")}
             <br />
-            for what matters.
+            {t("auth.heroBody3")}
           </p>
           <div className="auth-features">
             <span>
-              <Check size={17} /> All your accounts, together
+              <Check size={17} /> {t("auth.feature1")}
             </span>
             <span>
-              <Check size={17} /> Categories that feel like you
+              <Check size={17} /> {t("auth.feature2")}
             </span>
             <span>
-              <Check size={17} /> Made for life in the UAE
+              <Check size={17} /> {t("auth.feature3")}
             </span>
           </div>
         </div>
-        <small>YOUR MONEY, IN VIEW.</small>
+        <small>{t("auth.storyFooter")}</small>
       </section>
       <section className="auth-side">
         <div className="auth-theme-toggle">
+          <LanguageToggle />
           <ThemeToggle />
         </div>
         <div className="auth-form">
           <span className="auth-tag">
-            <Leaf size={16} /> Welcome to Fuloos
+            <Leaf size={16} /> {t("auth.welcome")}
           </span>
           <h2>
-            {signup ? "Make yourself at home." : "Good to have you here."}
+            {signup ? t("auth.signUpTitle") : t("auth.signInTitle")}
           </h2>
           <p>
-            {signup
-              ? "Create your account and start with a clear view."
-              : "Sign in to pick up where you left off."}
+            {signup ? t("auth.signUpSubtitle") : t("auth.signInSubtitle")}
           </p>
           <button
             type="button"
@@ -274,13 +276,10 @@ export function Auth({
                 d="M12 6c1.5 0 2.8.5 3.8 1.5l2.8-2.8A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.9 5.5l3.3 2.6A6 6 0 0 1 12 6Z"
               />
             </svg>
-            {busy ? "Please wait…" : "Continue with Google"}
+            {busy ? t("auth.pleaseWait") : t("auth.continueGoogle")}
           </button>
           {googleAvailable === false && (
-            <p className="google-setup-note">
-              Google sign-in is awaiting setup. Email and password are available
-              below.
-            </p>
+            <p className="google-setup-note">{t("auth.googleSetupNote")}</p>
           )}
           {mfa ? (
             <form onSubmit={submitMfa} className="auth-mfa-form">
@@ -474,7 +473,7 @@ export function Auth({
                     setNotice("");
                   }}
                 >
-                  Sign in
+                  {t("auth.signIn")}
                 </button>
                 <button
                   className={signup ? "selected" : ""}
@@ -484,12 +483,12 @@ export function Auth({
                     setNotice("");
                   }}
                 >
-                  Sign up
+                  {t("auth.signUp")}
                 </button>
               </div>
               <form onSubmit={submit}>
                 <label>
-                  Email address
+                  {t("auth.email")}
                   <input
                     required
                     type="email"
@@ -500,7 +499,7 @@ export function Auth({
                   />
                 </label>
                 <label>
-                  Password
+                  {t("auth.password")}
                   <input
                     required
                     type="password"
@@ -509,7 +508,9 @@ export function Auth({
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={
-                      signup ? "At least 8 characters" : "Your password"
+                      signup
+                        ? t("auth.passwordPlaceholderSignUp")
+                        : t("auth.passwordPlaceholderSignIn")
                     }
                   />
                 </label>
@@ -524,8 +525,12 @@ export function Auth({
                   </div>
                 )}
                 <button className="primary auth-submit" disabled={busy}>
-                  {busy ? "Please wait…" : signup ? "Create account" : "Sign in"}
-                  <ArrowRight size={17} />
+                  {busy
+                    ? t("auth.pleaseWait")
+                    : signup
+                      ? t("auth.createAccount")
+                      : t("auth.signIn")}
+                  <ArrowRight size={17} className="rtl-flip" />
                 </button>
                 {!signup && backend && (
                   <div className="auth-aux-actions">
@@ -539,7 +544,7 @@ export function Auth({
                         setNotice("");
                       }}
                     >
-                      Forgot password?
+                      {t("auth.forgotPassword")}
                     </button>
                   </div>
                 )}
@@ -547,20 +552,15 @@ export function Auth({
             </>
           )}
           <div className="auth-divider">
-            <span>or take a look around</span>
+            <span>{t("auth.orDivider")}</span>
           </div>
           <button className="demo-button" onClick={onDemo}>
-            Explore the demo <ArrowRight size={16} />
+            {t("auth.exploreDemo")} <ArrowRight size={16} className="rtl-flip" />
           </button>
           {!backend && (
-            <p className="setup-note">
-              Preview mode · Live sign-in will be available once the database is
-              connected.
-            </p>
+            <p className="setup-note">{t("auth.previewNote")}</p>
           )}
-          <small className="auth-footnote">
-            A clearer picture starts with one small step.
-          </small>
+          <small className="auth-footnote">{t("auth.footnote")}</small>
         </div>
       </section>
     </div>

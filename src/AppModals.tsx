@@ -34,6 +34,7 @@ import {
   ConfirmOccurrenceModal,
   RecurringEditorModal,
 } from "./RecurringView";
+import { HouseholdSettings } from "./HouseholdSettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { SettingsDialog } from "./Settings";
 import { planTransactionDeletion } from "./transactionDeletion";
@@ -246,6 +247,115 @@ export function AppModals({
                   ? () => backend!.sendTestNotificationEmail()
                   : undefined
               }
+              onLoadPushSubscriptions={
+                !demo && backend
+                  ? () => backend!.loadPushSubscriptions()
+                  : undefined
+              }
+              onSavePushSubscription={
+                !demo && backend
+                  ? (sub) => backend!.savePushSubscription(sub)
+                  : undefined
+              }
+              onDeletePushSubscription={
+                !demo && backend
+                  ? (id) => backend!.deletePushSubscription(id)
+                  : undefined
+              }
+              onSendTestPush={
+                !demo && backend
+                  ? () => backend!.sendTestPushNotification()
+                  : undefined
+              }
+            />
+          }
+          household={
+            <HouseholdSettings
+              demo={demo}
+              userId={session?.user.id}
+              userEmail={session?.user.email}
+              accounts={ledger.accounts}
+              budgets={ledger.budgets ?? []}
+              categories={ledger.categories}
+              busy={busy}
+              onLoadHouseholds={
+                !demo && backend ? () => backend!.loadHouseholds() : undefined
+              }
+              onCreateHousehold={
+                !demo && backend
+                  ? (name) => backend!.createHousehold(name)
+                  : undefined
+              }
+              onCreateInvite={
+                !demo && backend
+                  ? (householdId, role) =>
+                      backend!.createHouseholdInvite(householdId, role)
+                  : undefined
+              }
+              onJoinHousehold={
+                !demo && backend
+                  ? (code) => backend!.joinHouseholdByCode(code)
+                  : undefined
+              }
+              onLeaveHousehold={
+                !demo && backend
+                  ? (householdId) => backend!.leaveHousehold(householdId)
+                  : undefined
+              }
+              onRemoveMember={
+                !demo && backend
+                  ? (memberId) => backend!.removeHouseholdMember(memberId)
+                  : undefined
+              }
+              onToggleAccountShare={async (accountId, householdId) => {
+                if (demo) {
+                  setLedger({
+                    ...ledger,
+                    accounts: ledger.accounts.map((a) =>
+                      a.id === accountId
+                        ? { ...a, household_id: householdId }
+                        : a,
+                    ),
+                  });
+                  return;
+                }
+                if (!backend) return;
+                const updated = await backend.shareAccountWithHousehold(
+                  accountId,
+                  householdId,
+                );
+                setLedger({
+                  ...ledger,
+                  accounts: ledger.accounts.map((a) =>
+                    a.id === accountId ? updated : a,
+                  ),
+                });
+              }}
+              onToggleBudgetShare={async (budgetId, householdId) => {
+                if (demo) {
+                  setLedger({
+                    ...ledger,
+                    budgets: (ledger.budgets ?? []).map((b) =>
+                      b.id === budgetId
+                        ? { ...b, household_id: householdId }
+                        : b,
+                    ),
+                  });
+                  return;
+                }
+                if (!backend) return;
+                const updated = await backend.shareBudgetWithHousehold(
+                  budgetId,
+                  householdId,
+                );
+                setLedger({
+                  ...ledger,
+                  budgets: (ledger.budgets ?? []).map((b) =>
+                    b.id === budgetId ? updated : b,
+                  ),
+                });
+              }}
+              onReloadLedger={!demo && backend ? load : undefined}
             />
           }
           dataBackup={

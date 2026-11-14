@@ -140,3 +140,18 @@ Fuloos can automatically capture UAE bank transaction alerts (Liv, Mashreq, ADCB
    - **iOS Shortcuts**: Create a Personal Automation triggered on receiving a bank SMS/Mail (or Share Sheet / Clipboard), then add **Get Contents of URL** (`POST`, JSON body `{ "token": "<YOUR_TOKEN>", "source": "shortcut", "text": "<Shortcut Input>" }`).
    - **Android Tasker**: Add a Notification/SMS event profile for your bank app/sender and send an **HTTP Request** (`POST`, JSON body `{ "token": "<YOUR_TOKEN>", "source": "shortcut", "text": "%evtprm3" }`).
 
+## Web Push Notifications (`1794700000_web_push.js` + `pb_hooks`)
+
+Fuloos supports opt-in browser Web Push notifications alongside email alerts using the pluggable channel dispatcher in `notifications_lib.js`.
+
+1. **Apply the migration & hooks**:
+   - Copy `pocketbase/pb_migrations/1794700000_web_push.js` into `pb_migrations/` and run `./pocketbase migrate up` (creates owner-only `fuloos_push_subscriptions` and extends `fuloos_notification_log.channel` to allow `"push"`).
+   - Copy `pocketbase/pb_hooks/web_push_lib.js`, `pocketbase/pb_hooks/web_push.pb.js`, `pocketbase/pb_hooks/notifications_lib.js`, and `pocketbase/pb_hooks/notifications.pb.js` into `pb_hooks/` and restart PocketBase.
+   - `web_push.pb.js` registers `POST /api/fuloos/push-test` (authenticated `fuloos_users`, rate-limited to 3 per hour / 60s cooldown).
+2. **Generate VAPID keys**:
+   - Generate a P-256 VAPID keypair (for example with `npx web-push generate-vapid-keys`).
+   - Set `VITE_VAPID_PUBLIC_KEY` as a **build** environment variable for the frontend (e.g. on Vercel), then rebuild/redeploy. Without `VITE_VAPID_PUBLIC_KEY`, the UI shows **Not configured** and explains that the VAPID key is missing.
+3. **Server-side push delivery (`PUSH_RELAY_URL`)**:
+   - **Runtime note**: PocketBase's embedded Goja JS runtime does not expose WebCrypto ECDH (P-256), AES-128-GCM, or ES256 JWT signing primitives required for direct RFC 8291 Web Push encryption. Rather than implementing unverified custom elliptic-curve cryptography in Goja, `web_push_lib.js` dispatches push payloads to an external HTTPS webhook relay configured via `PUSH_RELAY_URL` (and optional `PUSH_RELAY_SECRET` sent as `Authorization: Bearer <secret>`), forwarding `{ subscription: { endpoint, keys: { p256dh, auth } }, payload: { title, body, url, tag }, vapid?: { publicKey, privateKey, subject } }`.
+   - Set `PUSH_RELAY_URL`, `PUSH_RELAY_SECRET`, and optionally `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` on the PocketBase process.
+   - If the relay or push service returns HTTP `404` or `410`, PocketBase automatically deletes the stale `fuloos_push_subscriptions` record.

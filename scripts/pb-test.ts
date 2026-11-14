@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const migrationsDir = path.join(rootDir, "pocketbase", "pb_migrations");
+const hooksDir = path.join(rootDir, "pocketbase", "pb_hooks");
 const cacheDir = path.join(rootDir, ".pocketbase");
 const pbVersion = process.env.POCKETBASE_VERSION ?? "0.40.6";
 
@@ -110,6 +111,7 @@ async function main() {
       `--http=127.0.0.1:${port}`,
       `--dir=${dataDir}`,
       `--migrationsDir=${migrationsDir}`,
+      `--hooksDir=${hooksDir}`,
     ],
     {
       cwd: rootDir,

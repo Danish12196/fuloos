@@ -16,6 +16,10 @@ cronAdd("fuloos_notifications_hourly", "0 * * * *", () => {
   }
   if (!prefsCol || !logCol) return;
 
+  const pushLib = require(__hooks + "/web_push_lib.js");
+  const envFn = (k) => $os.getenv(k) || "";
+  const pushConfigured = pushLib.isPushRelayConfigured(envFn);
+
   const appUrl = $os.getenv("APP_URL") || "";
   const settings = $app.settings();
   const senderAddress = settings.meta.senderAddress || "noreply@fuloos.local";
@@ -32,11 +36,55 @@ cronAdd("fuloos_notifications_hourly", "0 * * * *", () => {
       });
       $app.newMailClient().send(mail);
     },
+    push: pushConfigured
+      ? (_recipient, message, meta) => {
+          const uid = meta && meta.userId;
+          if (!uid) return false;
+          let subs = [];
+          try {
+            subs = $app.findRecordsByFilter(
+              "fuloos_push_subscriptions",
+              "user_id = {:uid}",
+              "",
+              50,
+              0,
+              { uid },
+            );
+          } catch (_) {
+            return false;
+          }
+          if (!subs || subs.length === 0) return false;
+          let sentAny = false;
+          for (const subRec of subs) {
+            const subObj = {
+              endpoint: subRec.getString("endpoint"),
+              p256dh: subRec.getString("p256dh"),
+              auth: subRec.getString("auth"),
+            };
+            const res = pushLib.dispatchPushToSubscription(
+              $http.send,
+              subObj,
+              message,
+              envFn,
+            );
+            if (res.ok) {
+              sentAny = true;
+            } else if (res.gone) {
+              try {
+                $app.delete(subRec);
+              } catch (_) {
+                // Ignore cleanup error
+              }
+            }
+          }
+          return sentAny;
+        }
+      : undefined,
   });
 
   const prefRecords = $app.findRecordsByFilter(
     "fuloos_notification_prefs",
-    "email_enabled = true",
+    "email_enabled = true || channels != ''",
     "",
     500,
     0,
@@ -77,7 +125,6 @@ cronAdd("fuloos_notifications_hourly", "0 * * * *", () => {
         continue;
       }
       const userEmail = userRec.email ? userRec.email() : userRec.getString("email");
-      if (!userEmail) continue;
 
       const asOfDate = lib.todayInTimezone(prefs.timezone, new Date());
 
@@ -165,16 +212,29 @@ cronAdd("fuloos_notifications_hourly", "0 * * * *", () => {
         );
         if (existing.length > 0) continue;
 
-        const message = lib.buildEmailMessage(ev, appUrl);
+        if (ev.channel === "email" && !userEmail) continue;
+        const message =
+          ev.channel === "push"
+            ? lib.buildPushMessage(ev)
+            : lib.buildEmailMessage(ev, appUrl);
         try {
-          dispatcher.send(ev.channel, userEmail, message, { userId });
+          const sent = dispatcher.send(
+            ev.channel,
+            ev.channel === "push" ? userId : userEmail,
+            message,
+            { userId },
+          );
+          if (ev.channel === "push" && sent === false) continue;
           const logRec = new Record(logCol);
           logRec.set("user_id", userId);
           logRec.set("dedup_key", ev.dedupKey);
           logRec.set("channel", ev.channel);
           logRec.set("event_type", ev.eventType);
           logRec.set("period_key", ev.periodKey);
-          logRec.set("subject", String(message.subject || "").slice(0, 200));
+          logRec.set(
+            "subject",
+            String(message.subject || message.title || "").slice(0, 200),
+          );
           $app.save(logRec);
         } catch (sendErr) {
           $app

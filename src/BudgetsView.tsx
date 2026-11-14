@@ -323,7 +323,12 @@ export function BudgetsPage({
                 <div className="category-item" key={b.id}>
                   <CategoryIcon category={category} />
                   <div>
-                    <b>{category.name}</b>
+                    <b>
+                      {category.name}{" "}
+                      {b.household_id && (
+                        <span className="shared-badge">Shared</span>
+                      )}
+                    </b>
                     <p>
                       {concealed(b.amount)} a month · {budgetPeriod(b)}
                     </p>

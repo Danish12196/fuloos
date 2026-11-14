@@ -423,17 +423,42 @@
           : "Asia/Dubai",
       channels:
         p.channels && typeof p.channels === "object"
-          ? p.channels
-          : { email: Boolean(p.email_enabled) },
+          ? {
+              email:
+                p.channels.email !== undefined
+                  ? Boolean(p.channels.email)
+                  : Boolean(p.email_enabled),
+              push: Boolean(p.channels.push),
+            }
+          : { email: Boolean(p.email_enabled), push: false },
     };
   }
 
   function collectPendingNotifications(ledger, rawPrefs, asOfDate) {
     var prefs = normalizePrefs(rawPrefs);
-    if (!prefs.email_enabled) return [];
-    if (prefs.channels && prefs.channels.email === false) return [];
+    var activeChannels = [];
+    if (prefs.email_enabled && prefs.channels.email !== false) {
+      activeChannels.push("email");
+    }
+    if (prefs.channels && prefs.channels.push === true) {
+      activeChannels.push("push");
+    }
+    if (activeChannels.length === 0) return [];
 
     var events = [];
+    var pushForAllChannels = function (eventType, periodKey, keySuffix, payload) {
+      for (var c = 0; c < activeChannels.length; c++) {
+        var ch = activeChannels[c];
+        events.push({
+          channel: ch,
+          eventType: eventType,
+          periodKey: periodKey,
+          dedupKey: ch + ":" + eventType + ":" + keySuffix,
+          payload: payload,
+        });
+      }
+    };
+
     var recurringAlerts = computeRecurringAlerts(
       ledger,
       asOfDate,
@@ -443,20 +468,18 @@
     if (prefs.upcoming_bill_enabled) {
       for (var i = 0; i < recurringAlerts.upcoming.length; i++) {
         var up = recurringAlerts.upcoming[i];
-        events.push({
-          channel: "email",
-          eventType: "upcoming_bill",
-          periodKey: up.scheduledDate,
-          dedupKey:
-            "email:upcoming_bill:" + up.schedule.id + ":" + up.scheduledDate,
-          payload: {
+        pushForAllChannels(
+          "upcoming_bill",
+          up.scheduledDate,
+          up.schedule.id + ":" + up.scheduledDate,
+          {
             scheduleName: up.schedule.name,
             scheduleType: up.schedule.type,
             amount: up.schedule.amount,
             scheduledDate: up.scheduledDate,
             daysUntil: up.daysUntil,
-          },
-        });
+          }
+        );
       }
     }
 
@@ -465,20 +488,18 @@
       for (var j = 0; j < recurringAlerts.overdue.length; j++) {
         var ov = recurringAlerts.overdue[j];
         if (ov.scheduledDate < minOverdueDate) continue;
-        events.push({
-          channel: "email",
-          eventType: "overdue_bill",
-          periodKey: ov.scheduledDate,
-          dedupKey:
-            "email:overdue_bill:" + ov.schedule.id + ":" + ov.scheduledDate,
-          payload: {
+        pushForAllChannels(
+          "overdue_bill",
+          ov.scheduledDate,
+          ov.schedule.id + ":" + ov.scheduledDate,
+          {
             scheduleName: ov.schedule.name,
             scheduleType: ov.schedule.type,
             amount: ov.schedule.amount,
             scheduledDate: ov.scheduledDate,
             daysOverdue: Math.abs(ov.daysUntil),
-          },
-        });
+          }
+        );
       }
     }
 
@@ -488,34 +509,32 @@
       for (var b = 0; b < budgetRows.length; b++) {
         var row = budgetRows[b];
         if (row.status === "over" && prefs.budget_100_enabled) {
-          events.push({
-            channel: "email",
-            eventType: "budget_100",
-            periodKey: month,
-            dedupKey: "email:budget_100:" + row.category.id + ":" + month,
-            payload: {
+          pushForAllChannels(
+            "budget_100",
+            month,
+            row.category.id + ":" + month,
+            {
               categoryName: row.category.name,
               month: month,
               budget: row.budget,
               actual: row.actual,
-            },
-          });
+            }
+          );
         } else if (
           (row.status === "near" || row.status === "over") &&
           prefs.budget_80_enabled
         ) {
-          events.push({
-            channel: "email",
-            eventType: "budget_80",
-            periodKey: month,
-            dedupKey: "email:budget_80:" + row.category.id + ":" + month,
-            payload: {
+          pushForAllChannels(
+            "budget_80",
+            month,
+            row.category.id + ":" + month,
+            {
               categoryName: row.category.name,
               month: month,
               budget: row.budget,
               actual: row.actual,
-            },
-          });
+            }
+          );
         }
       }
     }
@@ -525,13 +544,7 @@
       if (weekday === prefs.digest_day) {
         var weekKey = isoWeekKey(asOfDate);
         var digest = computeWeeklyDigest(ledger, asOfDate);
-        events.push({
-          channel: "email",
-          eventType: "weekly_digest",
-          periodKey: weekKey,
-          dedupKey: "email:weekly_digest:" + weekKey,
-          payload: digest,
-        });
+        pushForAllChannels("weekly_digest", weekKey, weekKey, digest);
       }
     }
 
@@ -764,6 +777,87 @@
     };
   }
 
+  function buildPushMessage(notification) {
+    var p = (notification && notification.payload) || {};
+    var eventType = (notification && notification.eventType) || "test";
+    var title = "Fuloos";
+    var body = "You have a new financial alert.";
+    var url = "/?settings=notifications";
+    var tag = "fuloos-" + eventType;
+
+    switch (eventType) {
+      case "upcoming_bill": {
+        var when =
+          p.daysUntil === 0
+            ? "due today"
+            : p.daysUntil === 1
+              ? "due tomorrow"
+              : "due in " + p.daysUntil + " days";
+        title =
+          p.scheduleType === "income"
+            ? "Upcoming recurring income"
+            : "Upcoming bill due";
+        body = (p.scheduleName || "Scheduled item") + " is " + when + ".";
+        url = "/";
+        break;
+      }
+      case "overdue_bill": {
+        title = "Overdue recurring item";
+        body =
+          (p.scheduleName || "Scheduled item") +
+          " was due on " +
+          (p.scheduledDate || "a past date") +
+          ".";
+        url = "/";
+        break;
+      }
+      case "budget_80": {
+        title = "Budget threshold reached";
+        body =
+          "Your " +
+          (p.categoryName || "category") +
+          " budget has reached 80% for " +
+          (p.month || "this month") +
+          ".";
+        url = "/";
+        break;
+      }
+      case "budget_100": {
+        title = "Budget limit exceeded";
+        body =
+          "Your " +
+          (p.categoryName || "category") +
+          " budget has been exceeded for " +
+          (p.month || "this month") +
+          ".";
+        url = "/";
+        break;
+      }
+      case "weekly_digest": {
+        title = "Fuloos weekly summary";
+        body =
+          (p.txCount || 0) +
+          " transaction(s) recorded this week. Open Fuloos to review.";
+        url = "/";
+        break;
+      }
+      case "test":
+      default: {
+        title = "Fuloos: Test notification";
+        body = "Web Push notifications are working for this browser.";
+        url = "/?settings=notifications";
+        break;
+      }
+    }
+
+    return {
+      title: String(title).slice(0, 120),
+      body: String(body).slice(0, 240),
+      url: url,
+      tag: String(tag).slice(0, 64),
+    };
+  }
+
   function createChannelDispatcher(handlers) {
     var registry = handlers || {};
     return {
@@ -806,6 +900,7 @@
     escapeHtml: escapeHtml,
     buildManagePrefsUrl: buildManagePrefsUrl,
     buildEmailMessage: buildEmailMessage,
+    buildPushMessage: buildPushMessage,
     createChannelDispatcher: createChannelDispatcher,
   };
 });

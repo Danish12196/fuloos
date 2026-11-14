@@ -1,6 +1,8 @@
 import { ArrowRight, Plus } from "lucide-react";
 import type { Session } from "./client";
 import { today } from "./domain";
+import { useLocale, type TranslationKey } from "./i18n";
+import { LanguageToggle } from "./LanguageToggle";
 import { PeriodPicker } from "./PeriodPicker";
 import { periodDates, type PeriodSpan } from "./period";
 import { ThemeToggle } from "./ThemeToggle";
@@ -16,21 +18,24 @@ export function AppTopbar({
   session: Session | null;
   onOpenSettings: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <header className="topbar">
       <span>
-        Personal finance <span className="slash">/</span> <b>{page}</b>
+        {t("topbar.breadcrumb")} <span className="slash">/</span>{" "}
+        <b>{t(`nav.${page}` as TranslationKey)}</b>
       </span>
       <div className="topbar-right">
+        <LanguageToggle />
         <ThemeToggle />
         <span className="currency-pill">
-          AED <span>United Arab Emirates</span>
+          AED <span>{t("topbar.country")}</span>
         </span>
         <button
           type="button"
           className="small-avatar"
-          aria-label="Settings"
-          title="Settings"
+          aria-label={t("common.settings")}
+          title={t("common.settings")}
           onClick={onOpenSettings}
         >
           {demo ? "D" : session?.user.email?.slice(0, 1).toUpperCase()}
@@ -73,39 +78,41 @@ export function AppPageHeader({
     from?: string;
   }) => void;
 }) {
+  const { t } = useLocale();
+  const title =
+    page === "Overview"
+      ? t("header.title.Overview")
+      : t(`nav.${page}` as TranslationKey);
+  const subtitle = t(`header.subtitle.${page}` as TranslationKey);
+  const primaryActionLabel =
+    page === "Accounts"
+      ? t("action.addAccount")
+      : page === "Categories"
+        ? t("action.addCategory")
+        : page === "Recurring"
+          ? t("action.addRecurring")
+          : page === "Budgets"
+            ? t("action.addBudget")
+            : page === "Goals"
+              ? t("action.addGoal")
+              : page === "Net Worth"
+                ? t("action.addItem")
+                : t("action.addTransaction");
   return (
     <>
       {demo && (
         <div className="demo-banner">
-          <span>
-            You're exploring a sample workspace. Changes last until you leave.
-          </span>
+          <span>{t("demo.banner")}</span>
           <button onClick={onExitDemo}>
-            Sign in to save <ArrowRight size={14} />
+            {t("demo.signInToSave")} <ArrowRight size={14} className="rtl-flip" />
           </button>
         </div>
       )}
       <div className="page-heading">
         <div>
-          <div className="eyebrow">YOUR MONEY, IN VIEW</div>
-          <h1>{page === "Overview" ? "A clearer picture." : page}</h1>
-          <p>
-            {page === "Overview"
-              ? "Your everyday finances, all in one calm place."
-              : page === "Recurring"
-                ? "Subscriptions, bills and regular income — balances stay untouched until paid."
-                : page === "Budgets"
-                  ? "Monthly limits per category, and how your spending measures up."
-                  : page === "Goals"
-                    ? "Savings goals and sinking funds, tracked at your own pace."
-                    : page === "Net Worth"
-                      ? "Cash, investments, gold, property, and liabilities in one view."
-                      : page === "Accounts"
-                        ? "Every account. One place to see where you stand."
-                        : page === "Categories"
-                          ? "Organize your money in a way that makes sense to you."
-                          : "The small details behind the bigger picture."}
-          </p>
+          <div className="eyebrow">{t("header.eyebrow")}</div>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
         </div>
         <button
           className="primary"
@@ -113,29 +120,17 @@ export function AppPageHeader({
           onClick={onPrimaryAction}
         >
           <Plus size={18} />
-          {page === "Accounts"
-            ? "Add account"
-            : page === "Categories"
-              ? "Add category"
-              : page === "Recurring"
-                ? "Add recurring"
-                : page === "Budgets"
-                  ? "Add budget"
-                  : page === "Goals"
-                    ? "Add goal"
-                    : page === "Net Worth"
-                      ? "Add item"
-                      : "Add transaction"}
+          {primaryActionLabel}
         </button>
       </div>
       {error && (
         <div className="error" role="alert">
-          {error} <button onClick={onRetry}>Retry</button>
+          {error} <button onClick={onRetry}>{t("common.retry")}</button>
         </div>
       )}
       {loading && (
         <div className="loading-inline" role="status">
-          Loading your workspace…
+          {t("common.loadingWorkspace")}
         </div>
       )}
       {(page === "Overview" ||
@@ -143,7 +138,7 @@ export function AppPageHeader({
         page === "Reports") && (
         <div className="period-row">
           <PeriodPicker
-            label="Date range"
+            label={t("common.dateRange")}
             month={month}
             from={rangeFrom}
             span={span}

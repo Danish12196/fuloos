@@ -116,7 +116,12 @@ export function AccountsPage({
                     {a.emoji || <Wallet size={15} />}
                   </span>
                   <span>
-                    <b>{a.name}</b>
+                    <b>
+                      {a.name}{" "}
+                      {a.household_id && (
+                        <span className="shared-badge">Shared</span>
+                      )}
+                    </b>
                     {cardSummary &&
                       (cardSummary.creditLimitFils > 0 || dueLabel) && (
                         <span className="compact-cc-sub">
@@ -210,7 +215,12 @@ export function AccountsPage({
                     </button>
                   </div>
                 </div>
-                <h3>{a.name}</h3>
+                <h3>
+                  {a.name}{" "}
+                  {a.household_id && (
+                    <span className="shared-badge">Shared</span>
+                  )}
+                </h3>
                 <strong className="large-amount">{concealed(value)}</strong>
                 <p className="muted small">{balanceNote(a)}</p>
                 {cardSummary && (
